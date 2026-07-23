@@ -1,0 +1,20 @@
+# Node
+node_modules/
+dist/
+.env
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# AI service runtime data
+ai-service/storage/uploads/*
+ai-service/storage/downloads/*
+ai-service/storage/vector_db/*
+!ai-service/storage/**/.gitkeep
+
+# OS
+.DS_Store

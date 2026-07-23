@@ -1,0 +1,58 @@
+services:
+  # ── Python AI microservice (Whisper, Mistral, ChromaDB) ────────────────
+  - type: web
+    name: ai-video-assistant-ai-service
+    runtime: docker
+    dockerfilePath: ./ai-service/Dockerfile
+    dockerContext: ./ai-service
+    plan: standard          # Whisper needs real CPU/RAM — do not use the free tier
+    envVars:
+      - key: MISTRAL_API_KEY
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: WHISPER_MODEL
+        value: small
+      - key: AI_SERVICE_SECRET
+        sync: false
+      - key: PORT
+        value: 8000
+
+  # ── Express API gateway ─────────────────────────────────────────────────
+  - type: web
+    name: ai-video-assistant-server
+    runtime: docker
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
+    plan: starter
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: SELF_URL
+        sync: false   # set to this service's own Render URL after first deploy, e.g. https://ai-video-assistant-server.onrender.com
+      - key: AI_SERVICE_URL
+        sync: false   # set to the ai-service's Render URL, e.g. https://ai-video-assistant-ai-service.onrender.com
+      - key: INTERNAL_AI_SECRET
+        sync: false
+      - key: CLIENT_ORIGIN
+        sync: false   # set to the client's Render URL, e.g. https://ai-video-assistant-client.onrender.com
+      - key: PORT
+        value: 5000
+
+  # ── React static frontend ───────────────────────────────────────────────
+  - type: web
+    name: ai-video-assistant-client
+    runtime: static
+    buildCommand: cd client && npm install && npm run build
+    staticPublishPath: ./client/dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false   # set to the server's Render URL, e.g. https://ai-video-assistant-server.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

@@ -1,0 +1,39 @@
+# ── Web layer (new) ────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9         # required for file uploads via Form/UploadFile
+requests>=2.32.0
+
+# ── Audio / Video acquisition ─────────────────────────────────────────────
+yt-dlp>=2024.4.9
+pydub>=0.25.1
+ffmpeg-python>=0.2.0            # FFmpeg binary must also be installed on the system
+
+# ── Speech-to-Text (local Whisper) ────────────────────────────────────────
+openai-whisper>=20231117
+torch>=2.2.0
+torchaudio>=2.2.0
+
+# ── Translation (Hindi → English) ─────────────────────────────────────────
+deep-translator>=1.11.4
+
+# ── LLM Orchestration — LangChain LCEL + Mistral ──────────────────────────
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-community>=0.2.0
+langchain-mistralai>=0.1.0
+mistralai>=0.4.0
+
+# ── RAG Pipeline ───────────────────────────────────────────────────────────
+langchain-chroma>=0.1.2
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+langchain-huggingface>=0.0.3
+huggingface-hub>=0.23.0
+tiktoken>=0.7.0
+langchain-text-splitters>=0.2.0
+
+# ── Utilities ───────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+numpy>=1.26.0
+tqdm>=4.66.0
