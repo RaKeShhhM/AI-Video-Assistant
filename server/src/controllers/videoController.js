@@ -3,18 +3,15 @@ import { emitJobUpdate } from "../config/socket.js";
 import { askAiService, forwardProcessJob } from "../services/aiService.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { validateVideoSource } from "../utils/videoSource.js";
 
 export const createJob = asyncHandler(async (req, res) => {
-  const { youtubeUrl, language } = req.body;
-  const file = req.file;
-
-  if (!youtubeUrl && !file) {
-    throw new ApiError(400, "Provide either youtubeUrl or a file upload");
-  }
+  const { language } = req.body || {};
+  const { type, youtubeUrl, file } = validateVideoSource(req.body, req.file);
 
   const job = await Job.create({
     user: req.userId,
-    sourceType: youtubeUrl ? "youtube" : "upload",
+    sourceType: type,
     sourceValue: youtubeUrl || file.originalname,
     language: language || "english",
     status: "queued",

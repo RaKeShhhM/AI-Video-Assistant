@@ -32,9 +32,11 @@ def _post_callback(callback_url: str, callback_secret: str, payload: dict):
         print(f"[callback] failed to reach {callback_url}: {exc}")
 
 
+
 def run_pipeline_job(
     job_id: str,
     source: str,
+    source_type: str,
     language: str,
     callback_url: str,
     callback_secret: str,
@@ -56,7 +58,7 @@ def run_pipeline_job(
 
     try:
         progress("downloading_audio", 5)
-        chunk_paths = process_input(source)
+        chunk_paths = process_input(source, source_type=source_type)
 
         progress("transcribing", 20)
         transcript = transcribe_all(chunk_paths, language)

@@ -1,4 +1,8 @@
-FROM python:3.11-slim
+FROM node:22-bookworm-slim AS js-runtime
+FROM python:3.11-slim-bookworm
+
+# YouTube extraction requires a supported JS runtime plus yt-dlp-ejs.
+COPY --from=js-runtime /usr/local/bin/node /usr/local/bin/node
 
 # ffmpeg is required by pydub/yt-dlp/whisper for audio extraction & conversion
 RUN apt-get update && apt-get install -y --no-install-recommends \

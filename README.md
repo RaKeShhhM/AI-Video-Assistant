@@ -73,6 +73,12 @@ cp .env.example .env   # fill in MISTRAL_API_KEY, AI_SERVICE_SECRET, etc.
 uvicorn main:app --reload --port 8000
 ```
 
+# to run
+uv venv
+source .venv/Scripts/activate
+uv pip install -r requirements.txt
+
+
 ### 2. Express server
 ```bash
 cd server
@@ -159,3 +165,61 @@ locally.
 - Swap local Whisper for a hosted STT API in production for speed and lower
   memory footprint
 - Add pagination to the job list once history grows
+
+
+
+
+
+
+
+It's a **Python FastAPI** service. Here's how to run it:
+
+---
+
+## Steps to Run the AI Service
+
+### 1. Activate the virtual environment
+A `.venv` already exists, so activate it:
+```powershell
+cd ai-service
+.venv\Scripts\activate
+```
+
+### 2. Set up your `.env`
+Copy the example and fill in your keys:
+```powershell
+copy .env.example .env
+```
+Then edit [`.env`](file:///c:/Users/ASUS/OneDrive/Pictures/Desktop/GenAi/AIVideoAssistant-MERN/AiVideoAssistant/ai-service/.env) and set at minimum:
+- `MISTRAL_API_KEY` — required for AI processing
+- `AI_SERVICE_SECRET` — must match `INTERNAL_AI_SECRET` in your backend `server/.env`
+
+### 3. Install dependencies (if not already done)
+```powershell
+pip install -r requirements.txt
+```
+
+### 4. Run the FastAPI server
+```powershell
+python -m uvicorn main:app --reload --port 8000
+```
+
+Or if the `PORT` env var is set:
+```powershell
+uvicorn main:app --reload --port $env:PORT
+```
+
+---
+
+### Verify it's running
+Visit **http://localhost:8000/health** — you should get:
+```json
+{"status": "ok"}
+```
+
+---
+
+> **Note:** The service exposes three routes:
+> - `GET /health` — health check
+> - `POST /process` — accepts video/YouTube URL, kicks off background pipeline
+> - `POST /ask` — RAG-based Q&A over a processed job

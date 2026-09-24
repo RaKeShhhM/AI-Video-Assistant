@@ -12,7 +12,7 @@ export function initSocket(httpServer) {
 
   io.use((socket, next) => {
     try {
-      const token = socket.handshake.auth?.token;
+      const token = socket.handshake.auth?.token;//taking the token from the handshake auth object
       if (!token) return next(new Error("No auth token provided"));
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       socket.userId = decoded.id;

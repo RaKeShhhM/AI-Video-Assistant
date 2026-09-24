@@ -1,15 +1,28 @@
-import yt_dlp
 from pydub import AudioSegment
 import os
+from pathlib import Path
+
+from utils.video_source import normalize_youtube_url
+from utils.youtube_network import RestrictedYoutubeDL
 
 DOWNLOAD_DIR = os.getenv("DOWNLOAD_DIR", "storage/downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 def download_youtube_audio(url :str) ->str:
+    url = normalize_youtube_url(url)
     output_path = os.path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s")
+    downloaded_paths = []
     ydl_opts = {
-        "format": "bestaudio/best",
+        # Direct HTTPS media keeps fetching inside the guarded transport;
+        # remote manifests/external FFmpeg downloaders cannot bypass it.
+        "format": "bestaudio[protocol=https]/best[protocol=https]",
+        "proxy": "",
         "outtmpl": output_path,
+        # Python embedding does not use the yt-dlp CLI configuration.
+        # Deno is the default runtime; explicitly enable installed Node too.
+        "js_runtimes": {"deno": {}, "node": {}},
+        "noplaylist": True,
+        "post_hooks": [downloaded_paths.append],
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -19,10 +32,12 @@ def download_youtube_audio(url :str) ->str:
         ],
         "quiet": True,
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info).replace(".webm", ".wav").replace(".m4a", ".wav")
-    return filename
+    with RestrictedYoutubeDL(ydl_opts) as ydl:
+        ydl.extract_info(url, download=True, ie_key="Youtube")
+    # Use the final path after FFmpeg conversion, regardless of input format.
+    if not downloaded_paths or not os.path.isfile(downloaded_paths[-1]):
+        raise RuntimeError("YouTube download did not produce an audio file.")
+    return downloaded_paths[-1]
 
 # download_youtube_audio("https://www.youtube.com/watch?v=_Q-e_nczWqM&t=223s")
 
@@ -51,17 +66,21 @@ def chunk_audio(wav_path : str , chunk_minutes : int = 10) -> list:
     
     return chunks
 
-def process_input(source: str) -> list:
-    if source.startswith("http://") or source.startswith("https://"):
+def process_input(source: str, *, source_type: str) -> list:
+    if source_type == "youtube":
         print("Detected YouTube URL. Downloading audio...")
         wav_path = download_youtube_audio(source)
-    else:
+    elif source_type == "upload":
+        upload_root = Path(os.getenv("UPLOAD_DIR", "storage/uploads")).resolve()
+        upload = Path(source).resolve()
+        if not upload.is_relative_to(upload_root) or not upload.is_file():
+            raise ValueError("Upload must be a server-created file inside the upload directory.")
         print("Detected local file. Converting to WAV...")
-        wav_path = convert_to_wav(source)
+        wav_path = convert_to_wav(str(upload))
+    else:
+        raise ValueError("Unsupported source type.")
 
     print("Chunking audio...")
     chunks = chunk_audio(wav_path)
     print(f"Audio ready — {len(chunks)} chunk(s) created.")
     return chunks
-
-

@@ -1,14 +1,16 @@
 import os
+import re
 import shutil
 import uuid
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from core.rag_engine import ask_question, load_rag_chain
 from pipeline import run_pipeline_job
+from utils.video_source import validate_video_source
 
 load_dotenv()
 
@@ -42,6 +44,7 @@ def health():
 @app.post("/process")
 async def process_video(
     background_tasks: BackgroundTasks,
+    request: Request,
     job_id: str = Form(...),
     language: str = Form("english"),
     callback_url: str = Form(...),
@@ -52,14 +55,23 @@ async def process_video(
 ):
     _check_secret(service_secret)
 
-    if not youtube_url and not file:
-        raise HTTPException(status_code=400, detail="Provide either youtube_url or file")
+    form = await request.form()
+    if len(form.getlist("youtube_url")) > 1 or len(form.getlist("file")) > 1:
+        raise HTTPException(status_code=400, detail="Submit only one URL or one file.")
+    # Form binding treats empty strings as missing; keep explicit empty fields
+    # so URL+file remains invalid even when the URL is blank.
+    youtube_url = form.get("youtube_url") if "youtube_url" in form else None
+    try:
+        source_type, source = validate_video_source(youtube_url, file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if youtube_url:
-        source = youtube_url
-    else:
+    if source_type == "upload":
         ext = os.path.splitext(file.filename or "")[1] or ".mp4"
-        dest_path = os.path.join(UPLOAD_DIR, f"{job_id}{ext}")
+        if not re.fullmatch(r"\.[A-Za-z0-9]{1,10}", ext):
+            ext = ".bin"
+        # Paths are generated here, never supplied through a URL or job ID.
+        dest_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}{ext}")
         with open(dest_path, "wb") as out:
             shutil.copyfileobj(file.file, out)
         source = dest_path
@@ -68,6 +80,7 @@ async def process_video(
         run_pipeline_job,
         job_id=job_id,
         source=source,
+        source_type=source_type,
         language=language,
         callback_url=callback_url,
         callback_secret=callback_secret,
