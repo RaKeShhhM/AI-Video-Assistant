@@ -18,18 +18,22 @@ const app = express();
 
 const allowedOrigins = (process.env.CLIENT_ORIGIN || "*").split(",");
 app.use(cors({ origin: allowedOrigins, credentials: true }));
-app.use(express.json({ limit: "2mb" }));
+const proxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
+if (!Number.isInteger(proxyHops) || proxyHops < 0 || proxyHops > 5) throw new Error("Invalid TRUST_PROXY_HOPS");
+app.set("trust proxy", proxyHops);
 
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));
-app.use("/api/auth", authRoutes);
-app.use("/api/videos", videoRoutes);
-app.use("/api/internal", internalRoutes);
+app.use("/api/auth", express.json({ limit: "16kb" }), authRoutes);
+app.use("/api/videos", express.json({ limit: "16kb" }), videoRoutes);
+app.use("/api/internal", express.json({ limit: "2mb" }), internalRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 const server = http.createServer(app);
+server.requestTimeout = 120000;
+server.headersTimeout = 15000;
 initSocket(server);
 
 connectDB()

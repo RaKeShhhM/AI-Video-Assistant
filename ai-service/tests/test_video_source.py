@@ -42,7 +42,7 @@ class VideoSourceTests(unittest.TestCase):
             external.touch()
             internal = root / "generated.wav"
             internal.touch()
-            with patch.dict(os.environ, {"UPLOAD_DIR": str(root)}):
+            with patch.dict(os.environ, {"UPLOAD_DIR": str(root)}), patch("utils.audio_processor.DOWNLOAD_DIR", directory):
                 with patch("utils.audio_processor.convert_to_wav", return_value="converted.wav") as convert:
                     with self.assertRaises(ValueError):
                         process_input(str(external), source_type="upload")

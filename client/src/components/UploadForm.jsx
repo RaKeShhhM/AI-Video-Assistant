@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../lib/api";
 
@@ -10,6 +10,12 @@ export default function UploadForm() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const navigate = useNavigate();
+  const [policy, setPolicy] = useState(null);
+  useEffect(() => {
+    let active = true;
+    api.get("/videos/limits").then(({ data }) => { if (active) setPolicy(data); }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -21,6 +27,10 @@ export default function UploadForm() {
     }
     if (mode === "upload" && !file) {
       setError("Choose a video or audio file first.");
+      return;
+    }
+    if (mode === "upload" && policy && file.size > policy.maxUploadBytes) {
+      setError(`Choose a file smaller than ${policy.maxUploadBytes / 1024 / 1024} MB.`);
       return;
     }
 
@@ -85,11 +95,16 @@ export default function UploadForm() {
           <input
             id="file"
             type="file"
-            accept="video/*,audio/*"
+            accept={policy?.extensions.join(",") || ".mp4,.m4a,.mov,.mkv,.webm,.mp3,.wav,.ogg,.flac,.aac"}
             onChange={(e) => setFile(e.target.files?.[0] || null)}
           />
         </div>
       )}
+
+      {policy && <p className="dim" style={{ fontSize: 12, marginBottom: 16 }}>
+        Up to {policy.maxUploadBytes / 1024 / 1024} MB and {policy.maxMediaSeconds / 60} minutes per video.
+        Daily limits: {policy.dailyMediaMinutes} processing minutes and {policy.dailyQuestions} questions.
+      </p>}
 
       <div className="field">
         <label htmlFor="language">Language</label>

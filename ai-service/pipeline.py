@@ -9,11 +9,13 @@ callback-driven background job.
 """
 import os
 import traceback
+import wave
 
 from utils.internal_security import post_progress
 from utils.job_ids import validate_job_id
 
-from utils.audio_processor import process_input
+from utils.audio_processor import process_input, cleanup_media
+from utils.media_limits import MAX_SECONDS
 from core.transcriber import transcribe_all
 from core.summarizer import summarize, generate_title
 from core.extractor import extract_action_items, extract_key_decisions, extract_questions
@@ -34,6 +36,7 @@ def run_pipeline_job(
     source: str,
     source_type: str,
     language: str,
+    max_media_seconds: int = MAX_SECONDS,
 ):
     validate_job_id(job_id)
     chunk_paths = []
@@ -51,9 +54,13 @@ def run_pipeline_job(
 
     try:
         progress("downloading_audio", 5)
-        chunk_paths = process_input(source, source_type=source_type)
+        chunk_paths = process_input(source, source_type=source_type, max_seconds=max_media_seconds)
+        duration = 0
+        for path in chunk_paths:
+            with wave.open(path, "rb") as audio:
+                duration += audio.getnframes() / audio.getframerate()
 
-        progress("transcribing", 20)
+        progress("transcribing", 20, data={"duration_seconds": duration})
         transcript = transcribe_all(chunk_paths, language)
         progress("transcript_ready", 45, data={"transcript": transcript})
 
@@ -87,6 +94,7 @@ def run_pipeline_job(
             status="completed",
             data={
                 "title": title,
+                "duration_seconds": duration,
                 "transcript": transcript,
                 "summary": summary,
                 "action_items": action_items,
@@ -101,11 +109,7 @@ def run_pipeline_job(
         progress("error", 0, status="failed", data={"error": str(exc)})
 
     finally:
-        # Clean up temp chunk files (the original audio/video stays only if it
-        # was a direct upload we intentionally keep — chunks are always scratch).
-        for path in chunk_paths:
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except OSError:
-                pass
+        try:
+            cleanup_media(chunk_paths, source, source_type)
+        except OSError:
+            print("[pipeline] temporary media cleanup failed")

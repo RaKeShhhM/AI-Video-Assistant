@@ -25,6 +25,7 @@ const jobSchema = new mongoose.Schema(
     stage: { type: String, default: "queued" },
     percent: { type: Number, default: 0 },
     error: { type: String },
+    durationSeconds: { type: Number },
 
     title: { type: String, default: "Untitled video" },
     transcript: { type: String },

@@ -1,11 +1,13 @@
 import os
-import re
-import shutil
+import threading
+from pathlib import Path
 import uuid
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from starlette.datastructures import UploadFile
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
 from utils.internal_security import load_internal_settings, secret_matches
@@ -18,8 +20,12 @@ INTERNAL_SETTINGS = load_internal_settings()
 from core.rag_engine import ask_question, load_rag_chain
 from pipeline import run_pipeline_job
 from utils.video_source import validate_video_source
+from utils.media_limits import MAX_SECONDS, MAX_AI_ASKS, EXTENSIONS, MediaRejected, copy_upload, inspect_media
+from utils.request_limits import ProcessLimitsMiddleware
 
 app = FastAPI(title="AI Video Assistant - AI Service")
+app.add_middleware(ProcessLimitsMiddleware)
+ask_slots = threading.BoundedSemaphore(MAX_AI_ASKS)
 
 
 @app.middleware("http")
@@ -42,12 +48,27 @@ def health():
 async def process_video(
     background_tasks: BackgroundTasks,
     request: Request,
-    job_id: str = Form(...),
-    language: str = Form("english"),
-    youtube_url: str | None = Form(None),
-    file: UploadFile | None = File(None),
 ):
-    form = await request.form()
+    async with request.form(max_files=1, max_fields=4, max_part_size=4096) as form:
+        return await accept_process(background_tasks, form)
+
+
+async def accept_process(background_tasks, form):
+    # The form is parsed explicitly so field/file counts are constrained before
+    # Starlette spools any files, rather than after FastAPI's default parser.
+    job_id = form.get("job_id")
+    language = form.get("language", "english")
+    file = form.get("file")
+    if file is not None and not isinstance(file, UploadFile):
+        raise HTTPException(status_code=400, detail="file must be a multipart file upload.")
+    try:
+        max_media_seconds = int(form.get("max_media_seconds", MAX_SECONDS))
+        if not 1 <= max_media_seconds <= MAX_SECONDS:
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="Invalid media duration limit.") from None
+    if language not in {"english", "hinglish"}:
+        raise HTTPException(status_code=400, detail="Unsupported language.")
     if any(field in form for field in ("callback_url", "callback_secret", "service_secret")):
         raise HTTPException(status_code=400, detail="Credentials belong in X-Internal-Secret; callbacks are configured on the server.")
     try:
@@ -65,13 +86,21 @@ async def process_video(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if source_type == "upload":
-        ext = os.path.splitext(file.filename or "")[1] or ".mp4"
-        if not re.fullmatch(r"\.[A-Za-z0-9]{1,10}", ext):
-            ext = ".bin"
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext not in EXTENSIONS:
+            raise HTTPException(status_code=415, detail="Unsupported media extension.")
         # Paths are generated here, never supplied through a URL or job ID.
         dest_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}{ext}")
-        with open(dest_path, "wb") as out:
-            shutil.copyfileobj(file.file, out)
+        try:
+            await run_in_threadpool(copy_upload, file.file, dest_path)
+            await run_in_threadpool(inspect_media, dest_path, max_media_seconds)
+        except BaseException as exc:
+            Path(dest_path).unlink(missing_ok=True)
+            if isinstance(exc, MediaRejected):
+                raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+            raise
+        finally:
+            await file.close()
         source = dest_path
 
     background_tasks.add_task(
@@ -80,6 +109,7 @@ async def process_video(
         source=source,
         source_type=source_type,
         language=language,
+        max_media_seconds=max_media_seconds,
     )
 
     return {"status": "accepted", "job_id": job_id}
@@ -88,17 +118,23 @@ async def process_video(
 class AskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: str = Field(pattern=r"^[a-f0-9]{24}$")
-    question: str
+    question: str = Field(min_length=1, max_length=2000)
 
 
 @app.post("/ask")
 def ask(payload: AskRequest):
+    if not payload.question.strip():
+        raise HTTPException(status_code=400, detail="question is required")
+    if not ask_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="AI chat capacity is full. Try again later.", headers={"Retry-After": "60"})
     try:
         rag_chain = load_rag_chain(payload.job_id)
         answer = ask_question(rag_chain, payload.question)
         return {"answer": answer}
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        ask_slots.release()
 
 
 @app.get("/")

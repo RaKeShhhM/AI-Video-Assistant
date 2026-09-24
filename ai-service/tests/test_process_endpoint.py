@@ -1,6 +1,7 @@
 """Exercise real FastAPI form parsing without loading models or running jobs."""
 import importlib.util
 import io
+import wave
 import json
 import sys
 import tempfile
@@ -74,13 +75,18 @@ class ProcessEndpointTests(unittest.TestCase):
         self.assertEqual(self.worker.call_args.kwargs["source_type"], "youtube")
 
     def test_upload_path_is_server_generated_even_for_path_shaped_filenames(self):
+        sample = io.BytesIO()
+        with wave.open(sample, "wb") as audio:
+            audio.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+            audio.writeframes(b"\0\0" * 1600)
+        payload = sample.getvalue()
         response = self.client.post("/process", data=self.fields,
-                                    files={"file": ("../../clip.wav", io.BytesIO(b"test"), "audio/wav")})
+                                    files={"file": ("../../clip.wav", io.BytesIO(payload), "audio/wav")})
         self.assertEqual(response.status_code, 200, response.text)
         source = Path(self.worker.call_args.kwargs["source"])
         try:
             self.assertEqual(source.parent, Path(self.directory.name))
-            self.assertEqual(source.read_bytes(), b"test")
+            self.assertEqual(source.read_bytes(), payload)
             self.assertEqual(self.worker.call_args.kwargs["source_type"], "upload")
         finally:
             source.unlink()
@@ -135,5 +141,24 @@ class ProcessEndpointTests(unittest.TestCase):
 
     def test_ask_rejects_body_credentials_even_with_valid_header(self):
         response = self.client.post("/ask", json={"job_id": JOB_ID, "question": "test", "service_secret": TEST_SECRET})
+        self.assertEqual(response.status_code, 422)
+        self.rag.load_rag_chain.assert_not_called()
+
+    def test_rejected_media_is_removed_and_not_scheduled(self):
+        response = self.client.post("/process", data=self.fields,
+            files={"file": ("fake.wav", io.BytesIO(b"not audio"), "audio/wav")})
+        self.assertEqual(response.status_code, 415)
+        self.worker.assert_not_called()
+        self.assertEqual(list(Path(self.directory.name).iterdir()), [])
+
+    def test_request_limit_rejects_before_upload_or_worker(self):
+        response = self.client.post("/process", content=b"x", headers={"Content-Length": str(501 * 1024 * 1024)})
+        self.assertEqual(response.status_code, 413)
+        self.worker.assert_not_called()
+
+    def test_form_field_limits_and_question_length(self):
+        fields = [("job_id", (None, JOB_ID))] + [(f"extra{i}", (None, "x")) for i in range(5)]
+        self.assertEqual(self.client.post("/process", files=fields).status_code, 400)
+        response = self.client.post("/ask", json={"job_id": JOB_ID, "question": "x" * 2001})
         self.assertEqual(response.status_code, 422)
         self.rag.load_rag_chain.assert_not_called()

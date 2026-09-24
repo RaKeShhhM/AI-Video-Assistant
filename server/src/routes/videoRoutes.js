@@ -1,5 +1,7 @@
 import { Router } from "express";
-import multer from "multer";
+import { uploadMedia } from "../middleware/upload.js";
+import { rateLimit } from "../middleware/rateLimit.js";
+import { limits, mediaExtensions } from "../config/resourceLimits.js";
 import {
   askQuestion,
   createJob,
@@ -9,19 +11,16 @@ import {
 } from "../controllers/videoController.js";
 import { requireAuth } from "../middleware/auth.js";
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB cap on uploaded video/audio files
-});
-
 const router = Router();
 
 router.use(requireAuth);
 
-router.post("/", upload.single("file"), createJob);
+router.get("/limits", (req, res) => res.json({ maxUploadBytes: limits.uploadBytes, maxMediaSeconds: limits.mediaSeconds,
+  extensions: mediaExtensions, dailyMediaMinutes: limits.dailySeconds / 60, dailyQuestions: limits.dailyQuestions }));
+router.post("/", rateLimit({ max: 10, windowMs: 3600000 }), uploadMedia, createJob);
 router.get("/", listJobs);
 router.get("/:id", getJob);
 router.delete("/:id", deleteJob);
-router.post("/:id/ask", askQuestion);
+router.post("/:id/ask", rateLimit({ max: 20, windowMs: 60000 }), askQuestion);
 
 export default router;

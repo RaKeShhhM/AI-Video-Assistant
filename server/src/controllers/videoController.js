@@ -4,40 +4,64 @@ import { askAiService, forwardProcessJob } from "../services/aiService.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { validateVideoSource } from "../utils/videoSource.js";
+import mongoose from "mongoose";
+import { usage } from "../services/usageService.js";
+import { cleanupUpload } from "../middleware/upload.js";
+import { limits } from "../config/resourceLimits.js";
 
 export const createJob = asyncHandler(async (req, res) => {
-  const { language } = req.body || {};
-  const { type, youtubeUrl, file } = validateVideoSource(req.body, req.file);
-
-  const job = await Job.create({
-    user: req.userId,
-    sourceType: type,
-    sourceValue: youtubeUrl || file.originalname,
-    language: language || "english",
-    status: "queued",
-    stage: "queued",
-    percent: 0,
-    title: youtubeUrl ? youtubeUrl : file.originalname,
-  });
-
-  res.status(201).json({ job });
-
-  // Forward to the AI service after responding — the client already has the
-  // job id and will get live updates over Socket.io as the pipeline runs.
+  req.uploadOwnedByController = true;
+  let job;
+  let reserved = false;
+  const jobId = new mongoose.Types.ObjectId();
   try {
-    await forwardProcessJob({
-      jobId: job._id.toString(),
-      language: job.language,
-      youtubeUrl,
-      file,
+    const { language } = req.body || {};
+    const { type, youtubeUrl, file } = validateVideoSource(req.body, req.file);
+    if (language && !["english", "hinglish"].includes(language)) throw new ApiError(400, "Unsupported language.");
+    if (req.aborted) return;
+    await usage.reserveJob(req.userId, jobId);
+    reserved = true;
+
+    job = await Job.create({
+      _id: jobId,
+      user: req.userId,
+      sourceType: type,
+      sourceValue: youtubeUrl || file.originalname,
+      language: language || "english",
+      status: "queued",
+      stage: "queued",
+      percent: 0,
+      title: youtubeUrl ? youtubeUrl : file.originalname,
     });
+
+    res.status(201).json({ job });
+
+    // Keep disk storage until forwarding finishes; never remove it merely
+    // because the early 201 response has been delivered to the browser.
+    try {
+      await forwardProcessJob({
+        jobId: job._id.toString(),
+        language: job.language,
+        youtubeUrl,
+        file,
+      });
+    } catch (err) {
+      job.status = "failed";
+      job.stage = "error";
+      const rejected = [400, 413, 415, 422, 429].includes(err.response?.status);
+      job.error = rejected && typeof err.response.data?.detail === "string"
+        ? err.response.data.detail : "Could not reach the AI processing service. Please try again.";
+      await job.save();
+      await usage.finishJob(req.userId, job._id, rejected ? 0 : undefined);
+      emitJobUpdate(req.userId, job);
+      console.error("Failed to forward job to AI service:", err.message);
+    }
   } catch (err) {
-    job.status = "failed";
-    job.stage = "error";
-    job.error = "Could not reach the AI processing service. Please try again.";
-    await job.save();
-    emitJobUpdate(req.userId, job);
-    console.error("Failed to forward job to AI service:", err.message);
+    if (reserved && !job) await usage.finishJob(req.userId, jobId, 0);
+    throw err;
+  } finally {
+    await cleanupUpload(req).catch(() => console.error("Temporary upload cleanup failed"));
+    req.releaseUpload?.();
   }
 });
 
@@ -62,8 +86,8 @@ export const deleteJob = asyncHandler(async (req, res) => {
 
 export const askQuestion = asyncHandler(async (req, res) => {
   const { question } = req.body;
-  if (!question || !question.trim()) {
-    throw new ApiError(400, "question is required");
+  if (typeof question !== "string" || !question.trim() || question.length > limits.questionChars) {
+    throw new ApiError(400, `question must contain 1-${limits.questionChars} characters`);
   }
 
   const job = await Job.findOne({ _id: req.params.id, user: req.userId });
@@ -72,7 +96,14 @@ export const askQuestion = asyncHandler(async (req, res) => {
     throw new ApiError(400, "This video is still processing — chat unlocks once it's done");
   }
 
-  const answer = await askAiService(job._id.toString(), question.trim());
+  await usage.reserveQuestion(req.userId);
+  let answer;
+  try {
+    answer = await askAiService(job._id.toString(), question.trim());
+  } catch (err) {
+    if (err.response?.status === 429) throw new ApiError(429, "AI chat capacity is full. Try again later.");
+    throw err;
+  }
 
   job.chat.push({ question: question.trim(), answer });
   await job.save();
@@ -100,8 +131,12 @@ export const receiveProgress = asyncHandler(async (req, res) => {
   if (data?.key_decisions) job.keyDecisions = data.key_decisions;
   if (data?.open_questions) job.openQuestions = data.open_questions;
   if (data?.error) job.error = data.error;
+  if (Number.isFinite(data?.duration_seconds) && data.duration_seconds > 0 && data.duration_seconds <= limits.mediaSeconds) {
+    job.durationSeconds = data.duration_seconds;
+  }
 
   await job.save();
+  if (["completed", "failed"].includes(job.status)) await usage.finishJob(job.user, job._id, job.durationSeconds);
 
   emitJobUpdate(job.user.toString(), job);
 
