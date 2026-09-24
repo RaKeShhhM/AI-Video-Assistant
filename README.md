@@ -69,7 +69,7 @@ mern-app/
 cd ai-service
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in MISTRAL_API_KEY, AI_SERVICE_SECRET, etc.
+cp .env.example .env   # fill in MISTRAL_API_KEY, AI_SERVICE_SECRET, EXPRESS_INTERNAL_URL
 uvicorn main:app --reload --port 8000
 ```
 
@@ -113,21 +113,30 @@ services mixed together, so the flow is:
 1. Push this repo to GitHub.
 2. In Render, choose **New → Blueprint** and point it at the repo — it will
    read `render.yaml` and create three services:
-   - `ai-video-assistant-ai-service` (Docker, Python/FastAPI)
+   - `ai-video-assistant-ai-service` (private Docker service, Python/FastAPI)
    - `ai-video-assistant-server` (Docker, Node/Express)
    - `ai-video-assistant-client` (Static site, React build)
 3. Set the `sync: false` env vars for each service in the Render dashboard:
    - **ai-service**: `MISTRAL_API_KEY`, `SARVAM_API_KEY` (optional),
-     `AI_SERVICE_SECRET` (make up a long random string)
+     `AI_SERVICE_SECRET` (random 32-256 character secret), and
+     `EXPRESS_INTERNAL_URL` (Express's reachable origin, preferably its private hostname and port)
    - **server**: `MONGO_URI` (from MongoDB Atlas), `JWT_SECRET` (long random
      string), `INTERNAL_AI_SECRET` (**same value** as `AI_SERVICE_SECRET`
-     above), then after the first deploy, `SELF_URL` and `AI_SERVICE_URL`
-     using the `.onrender.com` URLs Render assigns, and `CLIENT_ORIGIN` with
-     the client's URL
+     above), `AI_SERVICE_URL` (`http://<AI private hostname>:8000`), and
+     `CLIENT_ORIGIN` with the client's URL. The AI service has no public
+     `.onrender.com` URL. `SELF_URL` is no longer used for callbacks.
    - **client**: `VITE_API_URL` set to the server's `.onrender.com` URL
-4. Redeploy `server` and `client` after filling in the URL-dependent env
+4. Redeploy the affected services after filling in the URL-dependent env
    vars (Render doesn't hot-reload env var changes into a running static
-   build, so trigger a manual redeploy for the client).
+  build, so trigger a manual redeploy for the client).
+
+Both backends reject missing or placeholder internal secrets at startup. Use
+the same randomly generated value in `AI_SERVICE_SECRET` and
+`INTERNAL_AI_SECRET`; for example, generate one locally with
+`python -c "import secrets; print(secrets.token_urlsafe(48))"` and place it in
+the two private environments. Never commit the value. Internal calls use
+`X-Internal-Secret`; callback URLs and credentials are not accepted in request
+bodies. Restart both backends when changing the shared secret.
 
 **MongoDB:** Render doesn't offer managed MongoDB — use
 [MongoDB Atlas](https://www.mongodb.com/atlas) free tier and paste the

@@ -25,13 +25,11 @@ export const createJob = asyncHandler(async (req, res) => {
   // Forward to the AI service after responding — the client already has the
   // job id and will get live updates over Socket.io as the pipeline runs.
   try {
-    const callbackUrl = `${process.env.SELF_URL}/api/internal/jobs/progress`;
     await forwardProcessJob({
       jobId: job._id.toString(),
       language: job.language,
       youtubeUrl,
       file,
-      callbackUrl,
     });
   } catch (err) {
     job.status = "failed";

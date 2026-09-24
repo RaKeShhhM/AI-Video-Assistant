@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 
 BASE = Path(__file__).resolve().parents[1]
 CASES = json.loads((BASE.parent / "tests/fixtures/video_sources.json").read_text())
+TEST_SECRET = "test-only-internal-secret-0123456789abcdef"
+JOB_ID = "6ab43b980163a134e354a9d9"
 
 
 class ProcessEndpointTests(unittest.TestCase):
@@ -25,13 +27,16 @@ class ProcessEndpointTests(unittest.TestCase):
         pipeline = types.ModuleType("pipeline")
         pipeline.run_pipeline_job = Mock()
         with patch.dict(sys.modules, {"core.rag_engine": rag, "pipeline": pipeline}):
-            with patch("dotenv.load_dotenv"), patch.dict("os.environ", {"UPLOAD_DIR": cls.directory.name}):
+            with patch("dotenv.load_dotenv"), patch.dict("os.environ", {
+                "UPLOAD_DIR": cls.directory.name, "AI_SERVICE_SECRET": TEST_SECRET,
+                "EXPRESS_INTERNAL_URL": "http://localhost:5000",
+            }):
                 spec = importlib.util.spec_from_file_location("source_test_app", BASE / "main.py")
                 cls.module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(cls.module)
-        cls.module.SERVICE_SECRET = "test-secret"
+        cls.rag = rag
         cls.worker = pipeline.run_pipeline_job
-        cls.client = TestClient(cls.module.app)
+        cls.client = TestClient(cls.module.app, headers={"X-Internal-Secret": TEST_SECRET})
 
     @classmethod
     def tearDownClass(cls):
@@ -40,9 +45,10 @@ class ProcessEndpointTests(unittest.TestCase):
 
     def setUp(self):
         self.worker.reset_mock()
+        self.rag.load_rag_chain.reset_mock()
+        self.rag.ask_question.reset_mock()
         self.fields = {
-            "job_id": "test-job", "callback_url": "http://unused.invalid", 
-            "callback_secret": "test-secret", "service_secret": "test-secret",
+            "job_id": JOB_ID,
         }
 
     def test_invalid_sources_never_write_files_or_schedule_jobs(self):
@@ -67,8 +73,8 @@ class ProcessEndpointTests(unittest.TestCase):
         self.assertEqual(self.worker.call_args.kwargs["source"], CASES["canonical"])
         self.assertEqual(self.worker.call_args.kwargs["source_type"], "youtube")
 
-    def test_upload_path_is_server_generated_even_for_path_shaped_identifiers(self):
-        response = self.client.post("/process", data={**self.fields, "job_id": "../../escape"},
+    def test_upload_path_is_server_generated_even_for_path_shaped_filenames(self):
+        response = self.client.post("/process", data=self.fields,
                                     files={"file": ("../../clip.wav", io.BytesIO(b"test"), "audio/wav")})
         self.assertEqual(response.status_code, 200, response.text)
         source = Path(self.worker.call_args.kwargs["source"])
@@ -85,3 +91,49 @@ class ProcessEndpointTests(unittest.TestCase):
         response = self.client.post("/process", files=fields)
         self.assertEqual(response.status_code, 400)
         self.worker.assert_not_called()
+
+    def test_authentication_is_required_before_parsing_body(self):
+        with TestClient(self.module.app) as client:
+            for path in ["/process", "/ask", "/process/", "/ask/"]:
+                for headers in [{}, {"X-Internal-Secret": "wrong"}]:
+                    response = client.post(path, content=b"not even a valid request", headers=headers)
+                    self.assertEqual(response.status_code, 401)
+            response = client.post("/ask", json={"job_id": JOB_ID, "question": "test", "service_secret": TEST_SECRET})
+            self.assertEqual(response.status_code, 401)
+        self.worker.assert_not_called()
+        self.rag.load_rag_chain.assert_not_called()
+
+    def test_duplicate_auth_headers_are_rejected(self):
+        with TestClient(self.module.app) as client:
+            response = client.post("/ask", headers=[("X-Internal-Secret", TEST_SECRET)] * 2,
+                                   json={"job_id": JOB_ID, "question": "test"})
+            self.assertEqual(response.status_code, 401)
+
+    def test_legacy_callback_overrides_are_rejected(self):
+        for key in ["callback_url", "callback_secret", "service_secret"]:
+            response = self.client.post("/process", data={**self.fields,
+                "youtube_url": CASES["canonical"], key: "https://untrusted.invalid"})
+            self.assertEqual(response.status_code, 400)
+        self.worker.assert_not_called()
+
+    def test_invalid_job_ids_cannot_schedule_jobs_or_load_vectors(self):
+        for job_id in ["../../escape", "C:\\private", "x" * 24, "", "a" * 25]:
+            response = self.client.post("/process", data={**self.fields, "job_id": job_id,
+                                        "youtube_url": CASES["canonical"]})
+            self.assertIn(response.status_code, (400, 422))
+            response = self.client.post("/ask", json={"job_id": job_id, "question": "test"})
+            self.assertEqual(response.status_code, 422)
+        self.worker.assert_not_called()
+        self.rag.load_rag_chain.assert_not_called()
+
+    def test_valid_header_allows_ask_without_body_credentials(self):
+        self.rag.ask_question.return_value = "test answer"
+        response = self.client.post("/ask", json={"job_id": JOB_ID, "question": "test"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"answer": "test answer"})
+        self.rag.load_rag_chain.assert_called_once_with(JOB_ID)
+
+    def test_ask_rejects_body_credentials_even_with_valid_header(self):
+        response = self.client.post("/ask", json={"job_id": JOB_ID, "question": "test", "service_secret": TEST_SECRET})
+        self.assertEqual(response.status_code, 422)
+        self.rag.load_rag_chain.assert_not_called()

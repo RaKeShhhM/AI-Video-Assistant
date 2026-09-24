@@ -11,9 +11,11 @@ services:
   ai-service:
     build: ./ai-service
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000" # local debugging only; gateway uses the private Compose network
     env_file:
       - ./ai-service/.env
+    environment:
+      - EXPRESS_INTERNAL_URL=http://server:5000
     volumes:
       - ./ai-service:/app
 

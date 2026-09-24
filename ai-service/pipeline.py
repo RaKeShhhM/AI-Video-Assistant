@@ -10,7 +10,8 @@ callback-driven background job.
 import os
 import traceback
 
-import requests
+from utils.internal_security import post_progress
+from utils.job_ids import validate_job_id
 
 from utils.audio_processor import process_input
 from core.transcriber import transcribe_all
@@ -19,17 +20,12 @@ from core.extractor import extract_action_items, extract_key_decisions, extract_
 from core.rag_engine import build_rag_chain
 
 
-def _post_callback(callback_url: str, callback_secret: str, payload: dict):
+def _post_callback(payload: dict):
     """Best-effort callback to Express. Never let a callback failure crash the job."""
     try:
-        requests.post(
-            callback_url,
-            json=payload,
-            headers={"X-Internal-Secret": callback_secret},
-            timeout=15,
-        )
+        post_progress(payload)
     except Exception as exc:  # noqa: BLE001
-        print(f"[callback] failed to reach {callback_url}: {exc}")
+        print(f"[callback] delivery failed ({type(exc).__name__})")
 
 
 
@@ -38,15 +34,12 @@ def run_pipeline_job(
     source: str,
     source_type: str,
     language: str,
-    callback_url: str,
-    callback_secret: str,
 ):
+    validate_job_id(job_id)
     chunk_paths = []
 
     def progress(stage: str, percent: int, status: str = "processing", data: dict | None = None):
         _post_callback(
-            callback_url,
-            callback_secret,
             {
                 "job_id": job_id,
                 "status": status,

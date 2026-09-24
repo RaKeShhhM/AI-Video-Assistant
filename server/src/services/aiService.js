@@ -1,8 +1,8 @@
 import axios from "axios";
 import FormData from "form-data";
+import { validateInternalSecret } from "../config/internalSecurity.js";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
-const AI_SERVICE_SECRET = process.env.INTERNAL_AI_SECRET || "";
 
 /**
  * Kicks off a processing job on the AI service. Fire-and-forget from the
@@ -10,13 +10,10 @@ const AI_SERVICE_SECRET = process.env.INTERNAL_AI_SECRET || "";
  * the job and runs the actual pipeline in a background task, reporting
  * progress via callbackUrl.
  */
-export async function forwardProcessJob({ jobId, language, youtubeUrl, file, callbackUrl }) {
+export async function forwardProcessJob({ jobId, language, youtubeUrl, file }) {
   const form = new FormData();
   form.append("job_id", jobId);
   form.append("language", language);
-  form.append("callback_url", callbackUrl);
-  form.append("callback_secret", AI_SERVICE_SECRET);
-  form.append("service_secret", AI_SERVICE_SECRET);
 
   if (youtubeUrl) {
     form.append("youtube_url", youtubeUrl);
@@ -25,7 +22,8 @@ export async function forwardProcessJob({ jobId, language, youtubeUrl, file, cal
   }
 
   await axios.post(`${AI_SERVICE_URL}/process`, form, {
-    headers: form.getHeaders(),
+    headers: { ...form.getHeaders(), "X-Internal-Secret": validateInternalSecret() },
+    maxRedirects: 0,
     maxBodyLength: Infinity,
     maxContentLength: Infinity,
     timeout: 30000,
@@ -35,8 +33,8 @@ export async function forwardProcessJob({ jobId, language, youtubeUrl, file, cal
 export async function askAiService(jobId, question) {
   const { data } = await axios.post(
     `${AI_SERVICE_URL}/ask`,
-    { job_id: jobId, question, service_secret: AI_SERVICE_SECRET },
-    { timeout: 60000 }
+    { job_id: jobId, question },
+    { timeout: 60000, maxRedirects: 0, headers: { "X-Internal-Secret": validateInternalSecret() } }
   );
   return data.answer;
 }

@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import { ApiError } from "../utils/ApiError.js";
+import { internalSecretMatches, validateInternalSecret } from "../config/internalSecurity.js";
 
 export function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
@@ -20,7 +21,11 @@ export function requireAuth(req, res, next) {
 
 export function requireInternalSecret(req, res, next) {
   const secret = req.headers["x-internal-secret"];
-  if (!secret || secret !== process.env.INTERNAL_AI_SECRET) {
+  let expected;
+  try { expected = validateInternalSecret(); } catch {
+    return next(new ApiError(503, "Internal authentication is not configured"));
+  }
+  if (!internalSecretMatches(secret, expected)) {
     return next(new ApiError(401, "Invalid internal secret"));
   }
   next();

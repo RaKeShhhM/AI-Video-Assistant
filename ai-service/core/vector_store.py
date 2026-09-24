@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+from utils.job_ids import validate_job_id
 from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -23,16 +25,22 @@ def get_embeddings():
 
 
 def _collection_name(job_id: str) -> str:
+    validate_job_id(job_id)
     return f"job_{job_id}"
 
 
 def _persist_dir(job_id: str) -> str:
-    path = os.path.join(CHROMA_BASE_DIR, job_id)
+    validate_job_id(job_id)
+    root = Path(CHROMA_BASE_DIR).resolve()
+    path = (root / job_id).resolve()
+    if not path.is_relative_to(root):
+        raise ValueError("Vector storage must stay inside the configured directory.")
     os.makedirs(path, exist_ok=True)
-    return path
+    return str(path)
 
 
 def build_vector_store(transcript: str, job_id: str) -> Chroma:
+    validate_job_id(job_id)
     print(f"Building vector store for job {job_id}")
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
@@ -55,6 +63,7 @@ def build_vector_store(transcript: str, job_id: str) -> Chroma:
 
 
 def load_vector_store(job_id: str) -> Chroma:
+    validate_job_id(job_id)
     embeddings = get_embeddings()
     vector_store = Chroma(
         collection_name=_collection_name(job_id),
@@ -69,5 +78,4 @@ def get_retriever(vector_store : Chroma, k :int = 4):
         search_type = 'similarity',
         search_kwargs = {"k":k}
     )
-
 

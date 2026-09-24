@@ -1,6 +1,6 @@
 services:
   # ── Python AI microservice (Whisper, Mistral, ChromaDB) ────────────────
-  - type: web
+  - type: pserv
     name: ai-video-assistant-ai-service
     runtime: docker
     dockerfilePath: ./ai-service/Dockerfile
@@ -15,6 +15,8 @@ services:
         value: small
       - key: AI_SERVICE_SECRET
         sync: false
+      - key: EXPRESS_INTERNAL_URL
+        sync: false # Express origin on the same private network, including port
       - key: PORT
         value: 8000
 
@@ -35,7 +37,7 @@ services:
       - key: SELF_URL
         sync: false   # set to this service's own Render URL after first deploy, e.g. https://ai-video-assistant-server.onrender.com
       - key: AI_SERVICE_URL
-        sync: false   # set to the ai-service's Render URL, e.g. https://ai-video-assistant-ai-service.onrender.com
+        sync: false   # http://<AI private service hostname>:8000; no public AI URL
       - key: INTERNAL_AI_SECRET
         sync: false
       - key: CLIENT_ORIGIN

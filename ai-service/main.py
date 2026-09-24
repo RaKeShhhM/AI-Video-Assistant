@@ -5,36 +5,33 @@ import uuid
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
+
+from utils.internal_security import load_internal_settings, secret_matches
+from utils.job_ids import validate_job_id
+
+load_dotenv()
+# Validate before importing models or creating storage directories.
+INTERNAL_SETTINGS = load_internal_settings()
 
 from core.rag_engine import ask_question, load_rag_chain
 from pipeline import run_pipeline_job
 from utils.video_source import validate_video_source
 
-load_dotenv()
-
 app = FastAPI(title="AI Video Assistant - AI Service")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # this service is internal-only, sits behind the Express server
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+@app.middleware("http")
+async def authenticate_internal_requests(request: Request, call_next):
+    if request.url.path.rstrip("/") in {"/process", "/ask"}:
+        secrets = request.headers.getlist("x-internal-secret")
+        if len(secrets) != 1 or not secret_matches(secrets[0], INTERNAL_SETTINGS.secret):
+            return JSONResponse(status_code=401, content={"detail": "Invalid internal secret"})
+    return await call_next(request)
 
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "storage/uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-# Shared secret Express must present when it calls us, and that we present
-# back to Express's internal callback route. Keeps the internal link private.
-SERVICE_SECRET = os.getenv("AI_SERVICE_SECRET", "")
-
-
-def _check_secret(secret: str):
-    if SERVICE_SECRET and secret != SERVICE_SECRET:
-        raise HTTPException(status_code=401, detail="invalid service secret")
-
 
 @app.get("/health")
 def health():
@@ -47,15 +44,16 @@ async def process_video(
     request: Request,
     job_id: str = Form(...),
     language: str = Form("english"),
-    callback_url: str = Form(...),
-    callback_secret: str = Form(...),
-    service_secret: str = Form(""),
     youtube_url: str | None = Form(None),
     file: UploadFile | None = File(None),
 ):
-    _check_secret(service_secret)
-
     form = await request.form()
+    if any(field in form for field in ("callback_url", "callback_secret", "service_secret")):
+        raise HTTPException(status_code=400, detail="Credentials belong in X-Internal-Secret; callbacks are configured on the server.")
+    try:
+        validate_job_id(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if len(form.getlist("youtube_url")) > 1 or len(form.getlist("file")) > 1:
         raise HTTPException(status_code=400, detail="Submit only one URL or one file.")
     # Form binding treats empty strings as missing; keep explicit empty fields
@@ -82,22 +80,19 @@ async def process_video(
         source=source,
         source_type=source_type,
         language=language,
-        callback_url=callback_url,
-        callback_secret=callback_secret,
     )
 
     return {"status": "accepted", "job_id": job_id}
 
 
 class AskRequest(BaseModel):
-    job_id: str
+    model_config = ConfigDict(extra="forbid")
+    job_id: str = Field(pattern=r"^[a-f0-9]{24}$")
     question: str
-    service_secret: str = ""
 
 
 @app.post("/ask")
 def ask(payload: AskRequest):
-    _check_secret(payload.service_secret)
     try:
         rag_chain = load_rag_chain(payload.job_id)
         answer = ask_question(rag_chain, payload.question)

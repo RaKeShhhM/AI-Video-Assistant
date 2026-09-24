@@ -9,6 +9,10 @@ import { errorHandler, notFound } from "./middleware/errorHandler.js";
 import authRoutes from "./routes/authRoutes.js";
 import internalRoutes from "./routes/internalRoutes.js";
 import videoRoutes from "./routes/videoRoutes.js";
+import { validateInternalSecret } from "./config/internalSecurity.js";
+
+// Stop before connecting to MongoDB or opening a listening socket.
+validateInternalSecret();
 
 const app = express();
 
