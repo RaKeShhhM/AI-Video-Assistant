@@ -61,6 +61,8 @@ test("real multipart uploads use disk, reject oversized/unsupported content, and
     await settled();
     assert.equal((await submit(1024)).status, 200); // inclusive documented maximum
     await settled();
+    assert.equal((await submit(1025)).status, 413); // one byte over, including new Multer semantics
+    await settled();
     assert.equal((await submit(2048)).status, 413);
     await settled();
     assert.equal((await submit(20, "bad.exe", "application/octet-stream")).status, 415);

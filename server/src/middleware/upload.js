@@ -49,9 +49,10 @@ export function createUploadMiddleware({ maxBytes = limits.uploadBytes, maxSlots
     },
   };
   const parse = multer({ storage, limits: {
-    // Busboy signals its limit at equality; one extra byte lets files exactly
-    // at the documented maximum succeed while keeping the bound explicit.
-    fileSize: maxBytes + 1, files: 1, fields: 4, parts: 5, fieldSize: 4096, fieldNameSize: 100, headerPairs: 100,
+    // Multer 2.4 handles Busboy's equality boundary internally.
+    fileSize: maxBytes, files: 1, fields: 4, parts: 5, fieldSize: 4096, fieldNameSize: 100, headerPairs: 100,
+    // Submission fields are scalar; never materialize nested/sparse arrays.
+    fieldNestingDepth: 0, fieldArrayIndexLimit: 0,
   }, fileFilter(req, file, cb) {
     const ext = path.extname(file.originalname).toLowerCase();
     if (!mediaExtensions.includes(ext) || !(file.mimetype.startsWith("audio/") || file.mimetype.startsWith("video/")
