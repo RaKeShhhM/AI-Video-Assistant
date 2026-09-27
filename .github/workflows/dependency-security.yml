@@ -16,6 +16,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  client-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+
   upload-tests:
     strategy:
       fail-fast: false
@@ -27,8 +43,8 @@ jobs:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -48,15 +64,19 @@ jobs:
       run:
         working-directory: ${{ matrix.package }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
       # Audit the committed graph, including development dependencies.
       - run: npm audit --package-lock-only --audit-level=low --json > npm-audit.json
+      - name: Show audit findings in the job log
+        if: always()
+        run: |
+          node -e "const r=JSON.parse(require('fs').readFileSync('npm-audit.json','utf8')); if(r.error) console.error(r.error); console.log(r.metadata?.vulnerabilities); for(const [name,v] of Object.entries(r.vulnerabilities||{})) console.log(name, v.severity, 'affected:', v.range);"
       - name: Preserve audit findings even when the gate fails
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: npm-audit-${{ matrix.package }}
           path: ${{ matrix.package }}/npm-audit.json
@@ -67,8 +87,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           # Match the AI service Docker runtime.
           python-version: '3.11'
@@ -80,9 +100,22 @@ jobs:
         # Do not use --no-deps: requirements have lower bounds, not a lock.
         # --strict fails if a dependency cannot be collected for auditing.
         run: python -m pip_audit -r ai-service/requirements.txt --strict --progress-spinner off --format json --output python-audit.json
+      - name: Show audit findings in the job log
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = Path('python-audit.json')
+          if not report.exists():
+              raise SystemExit('No audit report: inspect the resolution/network error in the previous step.')
+          for package in json.loads(report.read_text())['dependencies']:
+              for issue in package.get('vulns', []):
+                  print(package['name'], package['version'], issue['id'], 'fixed in:', issue['fix_versions'] or 'none listed')
+          PY
       - name: Preserve resolved versions and vulnerability findings
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: python-audit
           path: python-audit.json
