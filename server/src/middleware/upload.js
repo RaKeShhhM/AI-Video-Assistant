@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { limits, mediaExtensions } from "../config/resourceLimits.js";
 import { ApiError } from "../utils/ApiError.js";
+import { uploadError } from "../utils/uploadError.js";
 
 export const uploadRoot = path.join(tmpdir(), "reel-api-uploads");
 
@@ -81,11 +82,11 @@ export function createUploadMiddleware({ maxBytes = limits.uploadBytes, maxSlots
       req.uploadDirectory = await mkdtemp(path.join(uploadRoot, "upload-"));
       if (req.aborted) { await cleanup(); return; }
       parse(req, res, async (err) => {
-        if (err) { await cleanup(); if (!req.aborted) return next(err); return; }
+        if (err) { await cleanup(); if (!req.aborted) return next(uploadError(err)); return; }
         if (req.file?.size > maxBytes) { await cleanup(); return next(new ApiError(413, "File exceeds the upload size limit.")); }
         next();
       });
-    } catch (err) { await cleanup(); next(err); }
+    } catch (err) { await cleanup(); if (!req.aborted) next(uploadError(err)); }
   };
 }
 
