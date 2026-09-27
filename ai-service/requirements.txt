@@ -15,7 +15,7 @@ torch>=2.2.0
 torchaudio>=2.2.0
 
 # ── Translation (Hindi → English) ─────────────────────────────────────────
-deep-translator>=1.11.4
+# Sarvam handles translation directly; no deep-translator dependency is used.
 
 # ── LLM Orchestration — LangChain LCEL + Mistral ──────────────────────────
 langchain>=0.2.0
