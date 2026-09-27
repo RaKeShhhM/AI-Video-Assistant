@@ -38,15 +38,28 @@ export function createUploadMiddleware({ maxBytes = limits.uploadBytes, maxSlots
     _handleFile(req, file, cb) {
       const destination = path.join(req.uploadDirectory, `source${path.extname(file.originalname).toLowerCase()}`);
       req.uploadPath = destination;
+      // Multer 2.4 can remove pending files during request abort. Publish the
+      // owned path immediately and wait for the write to close in _removeFile.
+      file.path = destination;
       const output = createWriteStream(destination, { flags: "wx" });
       const abort = () => file.stream.destroy(new Error("Upload interrupted"));
       req.once("aborted", abort);
       req.uploadWrite = pipeline(file.stream, output);
-      req.uploadWrite.then(() => cb(null, { path: destination, size: output.bytesWritten }), cb)
-        .finally(() => req.off("aborted", abort));
+      req.uploadWrite.then(() => {
+        req.off("aborted", abort);
+        cb(null, { path: destination, size: output.bytesWritten });
+      }, (err) => {
+        req.off("aborted", abort);
+        cb(err);
+      });
+      if (req.aborted) abort();
     },
     _removeFile(req, file, cb) {
-      unlink(file.path).then(() => cb(null), (err) => cb(err.code === "ENOENT" ? null : err));
+      const remove = async () => {
+        await req.uploadWrite?.catch(() => {});
+        if (file.path) await unlink(file.path).catch((err) => { if (err.code !== "ENOENT") throw err; });
+      };
+      remove().then(() => cb(null), cb);
     },
   };
   const parse = multer({ storage, limits: {
@@ -80,7 +93,7 @@ export function createUploadMiddleware({ maxBytes = limits.uploadBytes, maxSlots
     try {
       await mkdir(uploadRoot, { recursive: true });
       req.uploadDirectory = await mkdtemp(path.join(uploadRoot, "upload-"));
-      if (req.aborted) { await cleanup(); return; }
+      if (req.aborted || res.destroyed) { await cleanup(); return; }
       parse(req, res, async (err) => {
         if (err) { await cleanup(); if (!req.aborted) return next(uploadError(err)); return; }
         if (req.file?.size > maxBytes) { await cleanup(); return next(new ApiError(413, "File exceeds the upload size limit.")); }
