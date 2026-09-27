@@ -62,3 +62,29 @@ jobs:
           path: ${{ matrix.package }}/npm-audit.json
           if-no-files-found: warn
           retention-days: 14
+
+  python-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # Match the AI service Docker runtime.
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: ai-service/requirements.txt
+      - name: Install isolated audit tooling
+        run: python -m pip install pip-audit==2.10.1
+      - name: Resolve and audit the complete requirements graph
+        # Do not use --no-deps: requirements have lower bounds, not a lock.
+        # --strict fails if a dependency cannot be collected for auditing.
+        run: python -m pip_audit -r ai-service/requirements.txt --strict --progress-spinner off --format json --output python-audit.json
+      - name: Preserve resolved versions and vulnerability findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-audit
+          path: python-audit.json
+          if-no-files-found: warn
+          retention-days: 14
