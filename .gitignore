@@ -25,3 +25,6 @@ pitch.md
 update.md
 
 docs/
+
+# Generated full dependency audit report (uploaded as a CI artifact)
+/python-audit.json

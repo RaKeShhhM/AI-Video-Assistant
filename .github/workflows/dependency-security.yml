@@ -96,10 +96,18 @@ jobs:
           cache-dependency-path: ai-service/requirements.txt
       - name: Install isolated audit tooling
         run: python -m pip install pip-audit==2.10.1
+      - name: Test the audit policy fails closed
+        run: python -m unittest discover -s security/tests -v
+      - name: Install reviewed embedded storage dependencies for boundary checks
+        run: python -m pip install chromadb==1.5.9 langchain-chroma==1.1.0 langchain-text-splitters
+      - name: Verify embedded storage boundaries without models or providers
+        working-directory: ai-service
+        run: python -m unittest discover -s tests -p test_chroma_boundary.py -v
       - name: Resolve and audit the complete requirements graph
         # Do not use --no-deps: requirements have lower bounds, not a lock.
-        # --strict fails if a dependency cannot be collected for auditing.
-        run: python -m pip_audit -r ai-service/requirements.txt --strict --progress-spinner off --format json --output python-audit.json
+        # Runs the full strict scan; only approved, unexpired exact matches can pass.
+        # security/python-audit-policy.json is pending approval and currently blocks.
+        run: python security/audit_python.py
       - name: Show audit findings in the job log
         if: always()
         run: |

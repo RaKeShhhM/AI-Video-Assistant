@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "exceptions": [
+    {
+      "package": "chromadb",
+      "version": "1.5.9",
+      "advisory_ids": ["PYSEC-2026-311", "PYSEC-2026-3813", "PYSEC-2026-3814", "PYSEC-2026-3815"],
+      "reviewed_on": "2026-09-28",
+      "expires_on": "2026-10-28",
+      "approved": false,
+      "reason": "Embedded Rust client only; no Chroma HTTP server, RBAC provider or user-supplied embedding/model configuration. Pending owner review; see security/chroma-review.md."
+    }
+  ]
+}
