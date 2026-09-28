@@ -1,7 +1,8 @@
-# Proposed Chroma audit exception — pending approval
+# Chroma audit exception — approved, expires 28 October 2026
 
-Reviewed 28 September 2026. **Not enabled:** `approved` is false in
-`python-audit-policy.json`. The Python audit remains failing for these findings.
+Reviewed 28 September 2026. The owner approved enabling this exact exception and
+pushing it on 29 September 2026 (Asia/Kolkata). `approved` is true in
+`python-audit-policy.json`; the scope and expiry below are unchanged.
 
 ## Exact scope
 
@@ -56,8 +57,7 @@ deployment with different boundaries. Prefer a patched release when available.
 
 ## Approval and verification
 
-After explicit owner approval, set the single `approved` flag to true, update the
-reason to record the approval, commit and push. No CLI `--ignore-vuln` or blanket
+The single `approved` flag was enabled after explicit owner approval. No CLI `--ignore-vuln` or blanket
 `continue-on-error` is used. Passing means the reviewed policy is satisfied, not
 that the package has zero vulnerabilities.
 
@@ -68,8 +68,8 @@ python -m unittest discover -s tests -p test_chroma_boundary.py -v
 ```
 
 The full requirements scan is run by `python security/audit_python.py` from the
-repository root with pip-audit installed. Its exit code remains nonzero while
-approval is pending.
+repository root with pip-audit installed. It succeeds only when every finding is
+covered by the approved, unexpired policy and the full scan completed successfully.
 
 Local verification: **50 AI-service tests** and **6 policy tests** passed. The
 storage test read a temporary index created through the previous persistence

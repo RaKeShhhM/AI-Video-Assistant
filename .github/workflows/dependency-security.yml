@@ -106,7 +106,7 @@ jobs:
       - name: Resolve and audit the complete requirements graph
         # Do not use --no-deps: requirements have lower bounds, not a lock.
         # Runs the full strict scan; only approved, unexpired exact matches can pass.
-        # security/python-audit-policy.json is pending approval and currently blocks.
+        # The exact Chroma exception is owner-approved and expires on 2026-10-28.
         run: python security/audit_python.py
       - name: Show audit findings in the job log
         if: always()
