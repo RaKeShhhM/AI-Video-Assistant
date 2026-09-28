@@ -52,6 +52,31 @@ class ProcessEndpointTests(unittest.TestCase):
             "job_id": JOB_ID,
         }
 
+    def test_chroma_server_routes_are_not_mounted(self):
+        for path in ("/api/v1/collections", "/api/v2/tenants/default_tenant/databases/default_database/collections"):
+            for method in ("get", "post", "put", "delete"):
+                with self.subTest(method=method, path=path):
+                    response = self.client.request(method, path)
+                    self.assertEqual(response.status_code, 404)
+        self.worker.assert_not_called()
+        self.rag.load_rag_chain.assert_not_called()
+
+    def test_model_and_chroma_options_cannot_reach_worker_or_ask(self):
+        for field in ("model_name", "embedding_function", "configuration", "trust_remote_code", "host"):
+            with self.subTest(field=field):
+                response = self.client.post("/ask", json={
+                    "job_id": JOB_ID, "question": "test", field: "untrusted-value",
+                })
+                self.assertEqual(response.status_code, 422)
+                response = self.client.post("/process", data={
+                    **self.fields, "youtube_url": CASES["canonical"], field: "untrusted-value",
+                })
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(set(self.worker.call_args.kwargs), {
+                    "job_id", "source", "source_type", "language", "max_media_seconds",
+                })
+        self.rag.load_rag_chain.assert_not_called()
+
     def test_invalid_sources_never_write_files_or_schedule_jobs(self):
         for value in [item for item in CASES["invalid"] if isinstance(item, str)]:
             with self.subTest(value=value):

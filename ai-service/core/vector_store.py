@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from utils.job_ids import validate_job_id
+from utils.chroma_local import local_chroma_client
 from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -19,7 +20,7 @@ def get_embeddings():
     if _embeddings is None:
         _embeddings = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL,
-            model_kwargs={"device": "cpu"},
+            model_kwargs={"device": "cpu", "trust_remote_code": False},
         )
     return _embeddings
 
@@ -56,7 +57,7 @@ def build_vector_store(transcript: str, job_id: str) -> Chroma:
         documents=docs,
         embedding=embeddings,
         collection_name=_collection_name(job_id),
-        persist_directory=_persist_dir(job_id),
+        client=local_chroma_client(_persist_dir(job_id)),
     )
 
     return vector_store
@@ -68,7 +69,7 @@ def load_vector_store(job_id: str) -> Chroma:
     vector_store = Chroma(
         collection_name=_collection_name(job_id),
         embedding_function=embeddings,
-        persist_directory=_persist_dir(job_id),
+        client=local_chroma_client(_persist_dir(job_id)),
     )
 
     return vector_store
@@ -78,4 +79,3 @@ def get_retriever(vector_store : Chroma, k :int = 4):
         search_type = 'similarity',
         search_kwargs = {"k":k}
     )
-

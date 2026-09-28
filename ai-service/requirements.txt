@@ -25,8 +25,8 @@ langchain-mistralai>=0.1.0
 mistralai>=0.4.0
 
 # ── RAG Pipeline ───────────────────────────────────────────────────────────
-langchain-chroma>=0.1.2
-chromadb>=0.5.0
+langchain-chroma==1.1.0        # reviewed adapter; embedded-only configuration
+chromadb==1.5.9               # security/chroma-review.md: version-specific pending exception
 sentence-transformers>=3.0.0
 langchain-huggingface>=0.0.3
 huggingface-hub>=0.23.0
