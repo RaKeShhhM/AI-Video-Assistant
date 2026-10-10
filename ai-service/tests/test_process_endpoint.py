@@ -30,6 +30,7 @@ class ProcessEndpointTests(unittest.TestCase):
         with patch.dict(sys.modules, {"core.rag_engine": rag, "pipeline": pipeline}):
             with patch("dotenv.load_dotenv"), patch.dict("os.environ", {
                 "UPLOAD_DIR": cls.directory.name, "AI_SERVICE_SECRET": TEST_SECRET,
+                "MISTRAL_API_KEY": "test-mistral-key", "SARVAM_API_KEY": "",
                 "EXPRESS_INTERNAL_URL": "http://localhost:5000",
             }):
                 spec = importlib.util.spec_from_file_location("source_test_app", BASE / "main.py")

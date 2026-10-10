@@ -3,7 +3,6 @@ import threading
 from pathlib import Path
 import uuid
 
-from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from starlette.datastructures import UploadFile
 from fastapi.responses import JSONResponse
@@ -11,13 +10,14 @@ from fastapi.exceptions import RequestValidationError
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
-from utils.internal_security import load_internal_settings, secret_matches
+from utils.internal_security import secret_matches
+from settings import load_settings
 from utils.job_ids import validate_job_id
 from utils.index_errors import IndexRebuildRequired, INDEX_REBUILD_MESSAGE
 
-load_dotenv()
 # Validate before importing models or creating storage directories.
-INTERNAL_SETTINGS = load_internal_settings()
+SETTINGS = load_settings()
+INTERNAL_SETTINGS = SETTINGS.internal
 
 from core.rag_engine import ask_question, load_rag_chain
 from pipeline import run_pipeline_job
@@ -49,7 +49,7 @@ async def authenticate_internal_requests(request: Request, call_next):
             return JSONResponse(status_code=401, content={"detail": "Invalid internal secret"})
     return await call_next(request)
 
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", "storage/uploads")
+UPLOAD_DIR = str(SETTINGS.upload_dir)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 @app.get("/health")

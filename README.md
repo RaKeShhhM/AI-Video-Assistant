@@ -276,3 +276,31 @@ and retrieves from it in a fresh process using fixed local embeddings. This
 verifies on-disk reopening, not a live Render deployment or paid-model quality.
 Disk persistence does not make running background jobs durable; worker restart
 recovery, backups, retention/deletion and multi-instance storage remain separate.
+
+## Configuration startup (P1 / R1)
+
+The AI service calls `settings.load_settings()` before importing pipeline, model,
+or storage consumers. It reads `ai-service/.env` explicitly, independent of the
+shell's current directory. `AI_ENV_FILE` may select an existing absolute `.env`
+path. Deployment environment variables always take precedence; an explicitly
+empty required environment variable fails validation rather than falling back.
+
+Startup validates the internal secret/callback origin, required Mistral key,
+optional Sarvam key, transcription model settings, processing limits, and storage
+paths. Leave `SARVAM_API_KEY` empty when unused; example placeholder keys are
+rejected. Sarvam model identifiers are syntax-checked; provider availability is
+not tested at startup. Relative storage paths resolve against `ai-service/`.
+Upload, download and vector directories must be separate and non-nested so
+scratch cleanup cannot overlap durable indexes. Existing absolute deployment
+paths remain unchanged. No directories or models are created during validation.
+
+Configuration is a startup snapshot: restart the service after changing it.
+Consumer modules still use environment-backed constants, populated and validated
+by the startup loader before their imports. Future worker entry points must call
+this same loader before importing consumers. Direct library imports in isolated
+tests do not trigger production startup validation.
+
+`python-config-tests` in GitHub Actions runs fresh-process configuration tests
+without downloading models or calling providers. This is an additional targeted
+CI job; it does not replace the full local Python regression suite. R1 does not
+introduce a queue, durable workers, callback retries, or restart recovery (R2-R4).

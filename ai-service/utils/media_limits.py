@@ -6,11 +6,7 @@ from pathlib import Path
 import subprocess
 
 
-def setting(name, default, maximum):
-    value = int(os.getenv(name, default))
-    if not 1 <= value <= maximum:
-        raise RuntimeError(f"Invalid {name}")
-    return value
+from settings import bounded_integer as setting
 
 
 MAX_BYTES = setting("MAX_UPLOAD_MB", 100, 500) * 1024 * 1024
