@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from starlette.datastructures import UploadFile
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,6 +26,17 @@ from utils.request_limits import ProcessLimitsMiddleware
 
 app = FastAPI(title="AI Video Assistant - AI Service")
 app.add_middleware(ProcessLimitsMiddleware)
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request, exc):
+    # Pydantic errors can include the original input (including credentials).
+    return JSONResponse(status_code=422, content={"code": "INVALID_REQUEST", "detail": "Invalid request fields."})
+
+
+@app.exception_handler(Exception)
+async def internal_error(request, exc):
+    return JSONResponse(status_code=500, content={"code": "INTERNAL_ERROR", "detail": "Internal service error."})
 ask_slots = threading.BoundedSemaphore(MAX_AI_ASKS)
 
 
@@ -56,6 +68,9 @@ async def process_video(
 async def accept_process(background_tasks, form):
     # The form is parsed explicitly so field/file counts are constrained before
     # Starlette spools any files, rather than after FastAPI's default parser.
+    allowed = {"job_id", "language", "file", "youtube_url", "max_media_seconds"}
+    if any(key not in allowed or len(form.getlist(key)) != 1 for key in form):
+        raise HTTPException(status_code=400, detail="Unsupported or repeated process fields.")
     job_id = form.get("job_id")
     language = form.get("language", "english")
     file = form.get("file")
@@ -67,7 +82,7 @@ async def accept_process(background_tasks, form):
             raise ValueError()
     except (ValueError, TypeError):
         raise HTTPException(status_code=422, detail="Invalid media duration limit.") from None
-    if language not in {"english", "hinglish"}:
+    if not isinstance(language, str) or language not in {"english", "hinglish"}:
         raise HTTPException(status_code=400, detail="Unsupported language.")
     if any(field in form for field in ("callback_url", "callback_secret", "service_secret")):
         raise HTTPException(status_code=400, detail="Credentials belong in X-Internal-Secret; callbacks are configured on the server.")
@@ -116,12 +131,17 @@ async def accept_process(background_tasks, form):
 
 
 class AskRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
     job_id: str = Field(pattern=r"^[a-f0-9]{24}$")
     question: str = Field(min_length=1, max_length=2000)
 
 
-@app.post("/ask")
+class AskResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    answer: str = Field(min_length=1, max_length=50000)
+
+
+@app.post("/ask", response_model=AskResponse)
 def ask(payload: AskRequest):
     if not payload.question.strip():
         raise HTTPException(status_code=400, detail="question is required")
@@ -130,9 +150,11 @@ def ask(payload: AskRequest):
     try:
         rag_chain = load_rag_chain(payload.job_id)
         answer = ask_question(rag_chain, payload.question)
+        if not isinstance(answer, str) or not answer.strip() or len(answer) > 50000:
+            raise ValueError("Invalid provider answer")
         return {"answer": answer}
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="AI chat is temporarily unavailable. Please try again.") from exc
     finally:
         ask_slots.release()
 

@@ -3,7 +3,7 @@ import { emitJobUpdate } from "../config/socket.js";
 import { askAiService, forwardProcessJob } from "../services/aiService.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { validateVideoSource } from "../utils/videoSource.js";
+import { sourceInput, questionInput, jobId, progressInput } from "../utils/contracts.js";
 import mongoose from "mongoose";
 import { usage } from "../services/usageService.js";
 import { cleanupUpload } from "../middleware/upload.js";
@@ -15,9 +15,7 @@ export const createJob = asyncHandler(async (req, res) => {
   let reserved = false;
   const jobId = new mongoose.Types.ObjectId();
   try {
-    const { language } = req.body || {};
-    const { type, youtubeUrl, file } = validateVideoSource(req.body, req.file);
-    if (language && !["english", "hinglish"].includes(language)) throw new ApiError(400, "Unsupported language.");
+    const { type, youtubeUrl, file, language } = sourceInput(req.body, req.file);
     if (req.aborted) return;
     await usage.reserveJob(req.userId, jobId);
     reserved = true;
@@ -49,8 +47,7 @@ export const createJob = asyncHandler(async (req, res) => {
       job.status = "failed";
       job.stage = "error";
       const rejected = [400, 413, 415, 422, 429].includes(err.response?.status);
-      job.error = rejected && typeof err.response.data?.detail === "string"
-        ? err.response.data.detail : "Could not reach the AI processing service. Please try again.";
+      job.error = "AI processing could not start. Please check the source and try again.";
       await job.save();
       await usage.finishJob(req.userId, job._id, rejected ? 0 : undefined);
       emitJobUpdate(req.userId, job);
@@ -73,24 +70,21 @@ export const listJobs = asyncHandler(async (req, res) => {
 });
 
 export const getJob = asyncHandler(async (req, res) => {
-  const job = await Job.findOne({ _id: req.params.id, user: req.userId });
+  const job = await Job.findOne({ _id: jobId(req.params.id), user: req.userId });
   if (!job) throw new ApiError(404, "Job not found");
   res.json({ job });
 });
 
 export const deleteJob = asyncHandler(async (req, res) => {
-  const job = await Job.findOneAndDelete({ _id: req.params.id, user: req.userId });
+  const job = await Job.findOneAndDelete({ _id: jobId(req.params.id), user: req.userId });
   if (!job) throw new ApiError(404, "Job not found");
   res.json({ message: "Job deleted" });
 });
 
 export const askQuestion = asyncHandler(async (req, res) => {
-  const { question } = req.body;
-  if (typeof question !== "string" || !question.trim() || question.length > limits.questionChars) {
-    throw new ApiError(400, `question must contain 1-${limits.questionChars} characters`);
-  }
+  const question = questionInput(req.body);
 
-  const job = await Job.findOne({ _id: req.params.id, user: req.userId });
+  const job = await Job.findOne({ _id: jobId(req.params.id), user: req.userId });
   if (!job) throw new ApiError(404, "Job not found");
   if (job.status !== "completed") {
     throw new ApiError(400, "This video is still processing — chat unlocks once it's done");
@@ -102,7 +96,8 @@ export const askQuestion = asyncHandler(async (req, res) => {
     answer = await askAiService(job._id.toString(), question.trim());
   } catch (err) {
     if (err.response?.status === 429) throw new ApiError(429, "AI chat capacity is full. Try again later.");
-    throw err;
+    if (err instanceof ApiError) throw err;
+    throw new ApiError(502, "AI chat is temporarily unavailable. Please try again.");
   }
 
   job.chat.push({ question: question.trim(), answer });
@@ -113,11 +108,11 @@ export const askQuestion = asyncHandler(async (req, res) => {
 
 // Called by the AI service (internal, secret-protected) after each pipeline stage.
 export const receiveProgress = asyncHandler(async (req, res) => {
-  const { job_id: jobId, status, stage, percent, data } = req.body;
+  const { job_id: jobId, status, stage, percent, data } = progressInput(req.body);
 
   const job = await Job.findById(jobId);
   if (!job) {
-    return res.status(404).json({ message: "Job not found" });
+    throw new ApiError(404, "Job not found");
   }
 
   job.status = status || job.status;
@@ -130,7 +125,7 @@ export const receiveProgress = asyncHandler(async (req, res) => {
   if (data?.action_items) job.actionItems = data.action_items;
   if (data?.key_decisions) job.keyDecisions = data.key_decisions;
   if (data?.open_questions) job.openQuestions = data.open_questions;
-  if (data?.error) job.error = data.error;
+  if (status === "failed") job.error = "AI processing failed. Please try again.";
   if (Number.isFinite(data?.duration_seconds) && data.duration_seconds > 0 && data.duration_seconds <= limits.mediaSeconds) {
     job.durationSeconds = data.duration_seconds;
   }

@@ -106,7 +106,7 @@ def run_pipeline_job(
     except Exception as exc:  # noqa: BLE001
         print(f"[pipeline] job {job_id} failed: {exc}")
         traceback.print_exc()
-        progress("error", 0, status="failed", data={"error": str(exc)})
+        progress("error", 0, status="failed", data={"error": "AI processing failed. Please try again."})
 
     finally:
         try:

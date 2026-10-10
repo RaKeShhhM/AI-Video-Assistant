@@ -53,7 +53,7 @@ test("gateway sends header-only credentials and refuses HTTP redirects", async (
   const originalPost = axios.post;
   const calls = [];
   process.env.INTERNAL_AI_SECRET = SECRET;
-  axios.post = async (...args) => { calls.push(args); return { data: { answer: "answer" } }; };
+  axios.post = async (...args) => { calls.push(args); return { data: args[0].endsWith("/process") ? { status: "accepted", job_id: "6ab43b980163a134e354a9d9" } : { answer: "answer" } }; };
   try {
     await forwardProcessJob({ jobId: "6ab43b980163a134e354a9d9", language: "english", youtubeUrl: "https://www.youtube.com/watch?v=BaW_jenozKc" });
     const multipart = calls[0][1].getBuffer().toString();

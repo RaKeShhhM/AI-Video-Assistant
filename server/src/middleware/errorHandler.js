@@ -1,22 +1,19 @@
-export function notFound(req, res, next) {
-  res.status(404).json({ message: `Route not found: ${req.originalUrl}` });
+import { ApiError } from "../utils/ApiError.js";
+
+export function notFound(req, res) {
+  res.status(404).json({ code: "NOT_FOUND", message: "Route not found." });
 }
 
-// eslint-disable-next-line no-unused-vars
 export function errorHandler(err, req, res, next) {
   if (res.headersSent) return next(err);
-  if (err.code?.startsWith("LIMIT_")) {
-    return res.status(err.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({
-      message: err.code === "LIMIT_FILE_SIZE" ? "File exceeds the upload size limit." : "Invalid multipart upload: too many files/fields or oversized fields.",
-    });
-  }
-  if (err.status === 413) return res.status(413).json({ message: "Request body is too large." });
-  const statusCode = err.statusCode || 500;
-  if (statusCode === 429) res.set("Retry-After", "60");
-  if (statusCode >= 500) {
-    console.error(err);
-  }
-  res.status(statusCode).json({
-    message: err.message || "Internal server error",
-  });
+  let safe;
+  if (err.code === 11000) safe = new ApiError(409, "An account with this email already exists.", "EMAIL_IN_USE");
+  else if (err.type === "entity.parse.failed") safe = new ApiError(400, "Malformed JSON body.", "INVALID_JSON");
+  else if (err.status === 413) safe = new ApiError(413, "Request body is too large.");
+  else if (err instanceof ApiError) safe = err;
+  else if (["CastError", "ValidationError"].includes(err.name)) safe = new ApiError(400, "Invalid request data.");
+  else safe = new ApiError(500, "Internal server error.");
+  if (safe.statusCode === 429) res.set("Retry-After", "60");
+  if (safe.statusCode >= 500) console.error("Request failed:", err);
+  res.status(safe.statusCode).json({ code: safe.code, message: safe.statusCode === 500 ? "Internal server error." : safe.message });
 }

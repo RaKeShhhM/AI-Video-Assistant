@@ -1,3 +1,4 @@
+import { aiResponse } from "../utils/contracts.js";
 import axios from "axios";
 import FormData from "form-data";
 import { validateInternalSecret } from "../config/internalSecurity.js";
@@ -34,7 +35,7 @@ export async function forwardProcessJob({ jobId, language, youtubeUrl, file }) {
       maxContentLength: 65536,
       timeout: 120000,
     });
-    return data;
+    return aiResponse(data, jobId);
   } finally { stream?.destroy(); }
 }
 
@@ -42,7 +43,7 @@ export async function askAiService(jobId, question) {
   const { data } = await axios.post(
     `${AI_SERVICE_URL}/ask`,
     { job_id: jobId, question },
-    { timeout: 60000, maxRedirects: 0, headers: { "X-Internal-Secret": validateInternalSecret() } }
+    { timeout: 60000, maxContentLength: 262144, maxRedirects: 0, headers: { "X-Internal-Secret": validateInternalSecret() } }
   );
-  return data.answer;
+  return aiResponse(data).answer;
 }

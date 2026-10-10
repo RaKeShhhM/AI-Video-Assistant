@@ -11,14 +11,14 @@ export function rateLimit({ max, windowMs, clock = Date.now, key = (req) => req.
     let bucket = buckets.get(id);
     if (!bucket || bucket.reset <= now) {
       if (!bucket && buckets.size >= 10000) {
-        return res.status(429).set("Retry-After", "60").json({ message: "Too many requests. Try again later." });
+        return res.status(429).set("Retry-After", "60").json({ code: "RATE_LIMITED", message: "Too many requests. Try again later." });
       }
       bucket = { count: 0, reset: now + windowMs };
       buckets.set(id, bucket);
     }
     if (bucket.count >= max) {
       return res.status(429).set("Retry-After", String(Math.ceil((bucket.reset - now) / 1000)))
-        .json({ message: "Too many requests. Try again later." });
+        .json({ code: "RATE_LIMITED", message: "Too many requests. Try again later." });
     }
     bucket.count++;
     next();

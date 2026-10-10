@@ -71,10 +71,8 @@ class ProcessEndpointTests(unittest.TestCase):
                 response = self.client.post("/process", data={
                     **self.fields, "youtube_url": CASES["canonical"], field: "untrusted-value",
                 })
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(set(self.worker.call_args.kwargs), {
-                    "job_id", "source", "source_type", "language", "max_media_seconds",
-                })
+                self.assertEqual(response.status_code, 400)
+                self.worker.assert_not_called()
         self.rag.load_rag_chain.assert_not_called()
 
     def test_invalid_sources_never_write_files_or_schedule_jobs(self):
@@ -186,4 +184,30 @@ class ProcessEndpointTests(unittest.TestCase):
         self.assertEqual(self.client.post("/process", files=fields).status_code, 400)
         response = self.client.post("/ask", json={"job_id": JOB_ID, "question": "x" * 2001})
         self.assertEqual(response.status_code, 422)
+        self.rag.load_rag_chain.assert_not_called()
+
+    def test_provider_failures_and_bad_answers_are_sanitized(self):
+        for value in [None, {}, "", "x" * 50001]:
+            self.rag.ask_question.return_value = value
+            response = self.client.post("/ask", json={"job_id": JOB_ID, "question": "test"})
+            self.assertEqual(response.status_code, 500)
+            self.assertNotIn("Invalid provider", response.text)
+        self.rag.ask_question.side_effect = RuntimeError("secret /private/provider/path")
+        try:
+            response = self.client.post("/ask", json={"job_id": JOB_ID, "question": "test"})
+            self.assertEqual(response.status_code, 500)
+            self.assertNotIn("/private", response.text)
+        finally:
+            self.rag.ask_question.side_effect = None
+
+    def test_strict_question_types_and_repeated_scalar_fields(self):
+        for value in [None, True, 123, [], {}, "   "]:
+            response = self.client.post("/ask", json={"job_id": JOB_ID, "question": value})
+            self.assertIn(response.status_code, (400, 422))
+        for key in ["job_id", "language", "max_media_seconds"]:
+            fields = [("job_id", (None, JOB_ID)), ("youtube_url", (None, CASES["canonical"]))]
+            fields.extend([(key, (None, "english"))] * 2)
+            response = self.client.post("/process", files=fields)
+            self.assertEqual(response.status_code, 400)
+        self.worker.assert_not_called()
         self.rag.load_rag_chain.assert_not_called()

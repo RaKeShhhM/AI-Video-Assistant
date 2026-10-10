@@ -12,6 +12,7 @@ export function requireAuth(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (typeof decoded.id !== "string" || !/^[a-fA-F0-9]{24}$/.test(decoded.id)) throw new Error("Invalid subject");
     req.userId = decoded.id;
     next();
   } catch (err) {

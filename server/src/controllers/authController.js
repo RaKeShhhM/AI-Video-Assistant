@@ -1,3 +1,4 @@
+import { authInput } from "../utils/contracts.js";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 import { ApiError } from "../utils/ApiError.js";
@@ -10,18 +11,11 @@ function issueToken(user) {
 }
 
 export const register = asyncHandler(async (req, res) => {
-  const { name, email, password } = req.body;
+  const { name, email, password } = authInput(req.body, true);
 
-  if (!name || !email || !password) {
-    throw new ApiError(400, "name, email and password are required");
-  }
-  if (password.length < 6) {
-    throw new ApiError(400, "Password must be at least 6 characters");
-  }
-
-  const existing = await User.findOne({ email: email.toLowerCase() });
+  const existing = await User.findOne({ email });
   if (existing) {
-    throw new ApiError(409, "An account with this email already exists");
+    throw new ApiError(409, "An account with this email already exists.", "EMAIL_IN_USE");
   }
 
   const passwordHash = await User.hashPassword(password);
@@ -31,13 +25,9 @@ export const register = asyncHandler(async (req, res) => {
 });
 
 export const login = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password } = authInput(req.body);
 
-  if (!email || !password) {
-    throw new ApiError(400, "email and password are required");
-  }
-
-  const user = await User.findOne({ email: email.toLowerCase() });
+  const user = await User.findOne({ email });
   if (!user || !(await user.comparePassword(password))) {
     throw new ApiError(401, "Invalid email or password");
   }
