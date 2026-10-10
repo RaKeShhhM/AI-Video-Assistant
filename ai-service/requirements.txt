@@ -3,6 +3,7 @@ fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9         # required for file uploads via Form/UploadFile
 requests>=2.32.0
+pymongo>=4.8.0
 
 # ── Audio / Video acquisition ─────────────────────────────────────────────
 yt-dlp[default]==2026.8.19     # networking adapter tested against this version; includes EJS

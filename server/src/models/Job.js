@@ -28,6 +28,24 @@ const jobSchema = new mongoose.Schema(
     durationSeconds: { type: Number },
 
     title: { type: String, default: "Untitled video" },
+    sourceArtifact: {
+      bucket: { type: String, enum: ["jobMedia"] },
+      fileId: { type: mongoose.Schema.Types.ObjectId },
+      filename: { type: String },
+      contentType: { type: String },
+      size: { type: Number },
+      sha256: { type: String },
+    },
+    execution: {
+      attempts: { type: Number, default: 0 },
+      maxAttempts: { type: Number, default: 3 },
+      nextAttemptAt: { type: Date, default: Date.now },
+      workerId: { type: String },
+      attemptId: { type: String },
+      leaseUntil: { type: Date },
+      lastError: { type: String },
+      checkpoint: { type: String, default: "queued" },
+    },
     transcript: { type: String },
     summary: { type: String },
     actionItems: { type: String },
@@ -36,7 +54,19 @@ const jobSchema = new mongoose.Schema(
 
     chat: { type: [chatMessageSchema], default: [] },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    toJSON: {
+      transform(_doc, ret) {
+        delete ret.sourceArtifact;
+        if (ret.execution) {
+          delete ret.execution.workerId;
+          delete ret.execution.attemptId;
+        }
+        return ret;
+      },
+    },
+  }
 );
 
 export default mongoose.model("Job", jobSchema);

@@ -1,6 +1,6 @@
 import Job from "../models/Job.js";
 import { emitJobUpdate } from "../config/socket.js";
-import { askAiService, forwardProcessJob } from "../services/aiService.js";
+import { askAiService } from "../services/aiService.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sourceInput, questionInput, jobId, progressInput } from "../utils/contracts.js";
@@ -8,17 +8,25 @@ import mongoose from "mongoose";
 import { usage } from "../services/usageService.js";
 import { cleanupUpload } from "../middleware/upload.js";
 import { limits } from "../config/resourceLimits.js";
+import { deleteJobUpload, storeJobUpload } from "../services/jobMedia.js";
 
 export const createJob = asyncHandler(async (req, res) => {
   req.uploadOwnedByController = true;
   let job;
   let reserved = false;
+  let media;
   const jobId = new mongoose.Types.ObjectId();
   try {
     const { type, youtubeUrl, file, language } = sourceInput(req.body, req.file);
     if (req.aborted) return;
     await usage.reserveJob(req.userId, jobId);
     reserved = true;
+
+    if (file) media = await storeJobUpload({
+      path: file.path,
+      filename: file.originalname,
+      contentType: file.mimetype,
+    });
 
     job = await Job.create({
       _id: jobId,
@@ -30,30 +38,12 @@ export const createJob = asyncHandler(async (req, res) => {
       stage: "queued",
       percent: 0,
       title: youtubeUrl ? youtubeUrl : file.originalname,
+      sourceArtifact: media,
     });
 
     res.status(201).json({ job });
-
-    // Keep disk storage until forwarding finishes; never remove it merely
-    // because the early 201 response has been delivered to the browser.
-    try {
-      await forwardProcessJob({
-        jobId: job._id.toString(),
-        language: job.language,
-        youtubeUrl,
-        file,
-      });
-    } catch (err) {
-      job.status = "failed";
-      job.stage = "error";
-      const rejected = [400, 413, 415, 422, 429].includes(err.response?.status);
-      job.error = "AI processing could not start. Please check the source and try again.";
-      await job.save();
-      await usage.finishJob(req.userId, job._id, rejected ? 0 : undefined);
-      emitJobUpdate(req.userId, job);
-      console.error("Failed to forward job to AI service:", err.message);
-    }
   } catch (err) {
+    if (media && !job) await deleteJobUpload(media.fileId).catch(() => {});
     if (reserved && !job) await usage.finishJob(req.userId, jobId, 0);
     throw err;
   } finally {

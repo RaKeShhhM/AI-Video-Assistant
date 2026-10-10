@@ -92,11 +92,10 @@ class ProcessEndpointTests(unittest.TestCase):
             self.assertEqual(response.status_code, 400)
         self.worker.assert_not_called()
 
-    def test_canonical_youtube_source_is_scheduled(self):
+    def test_canonical_youtube_source_is_rejected_from_legacy_dispatch_endpoint(self):
         response = self.client.post("/process", data={**self.fields, "youtube_url": CASES["valid"][2]})
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(self.worker.call_args.kwargs["source"], CASES["canonical"])
-        self.assertEqual(self.worker.call_args.kwargs["source_type"], "youtube")
+        self.assertEqual(response.status_code, 410, response.text)
+        self.worker.assert_not_called()
 
     def test_upload_path_is_server_generated_even_for_path_shaped_filenames(self):
         sample = io.BytesIO()
@@ -106,14 +105,9 @@ class ProcessEndpointTests(unittest.TestCase):
         payload = sample.getvalue()
         response = self.client.post("/process", data=self.fields,
                                     files={"file": ("../../clip.wav", io.BytesIO(payload), "audio/wav")})
-        self.assertEqual(response.status_code, 200, response.text)
-        source = Path(self.worker.call_args.kwargs["source"])
-        try:
-            self.assertEqual(source.parent, Path(self.directory.name))
-            self.assertEqual(source.read_bytes(), payload)
-            self.assertEqual(self.worker.call_args.kwargs["source_type"], "upload")
-        finally:
-            source.unlink()
+        self.assertEqual(response.status_code, 410, response.text)
+        self.worker.assert_not_called()
+        self.assertEqual(list(Path(self.directory.name).iterdir()), [])
 
     def test_repeated_url_fields_are_rejected(self):
         fields = [(key, (None, value)) for key, value in self.fields.items()]

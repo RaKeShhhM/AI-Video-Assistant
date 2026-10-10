@@ -3,7 +3,7 @@ import threading
 from pathlib import Path
 import uuid
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from starlette.datastructures import UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -20,7 +20,6 @@ SETTINGS = load_settings()
 INTERNAL_SETTINGS = SETTINGS.internal
 
 from core.rag_engine import ask_question, load_rag_chain
-from pipeline import run_pipeline_job
 from utils.video_source import validate_video_source
 from utils.media_limits import MAX_SECONDS, MAX_AI_ASKS, EXTENSIONS, MediaRejected, copy_upload, inspect_media
 from utils.request_limits import ProcessLimitsMiddleware
@@ -58,15 +57,12 @@ def health():
 
 
 @app.post("/process")
-async def process_video(
-    background_tasks: BackgroundTasks,
-    request: Request,
-):
+async def process_video(request: Request):
     async with request.form(max_files=1, max_fields=4, max_part_size=4096) as form:
-        return await accept_process(background_tasks, form)
+        return await accept_process(form)
 
 
-async def accept_process(background_tasks, form):
+async def accept_process(form):
     # The form is parsed explicitly so field/file counts are constrained before
     # Starlette spools any files, rather than after FastAPI's default parser.
     allowed = {"job_id", "language", "file", "youtube_url", "max_media_seconds"}
@@ -119,16 +115,8 @@ async def accept_process(background_tasks, form):
             await file.close()
         source = dest_path
 
-    background_tasks.add_task(
-        run_pipeline_job,
-        job_id=job_id,
-        source=source,
-        source_type=source_type,
-        language=language,
-        max_media_seconds=max_media_seconds,
-    )
-
-    return {"status": "accepted", "job_id": job_id}
+    Path(source).unlink(missing_ok=True) if source_type == "upload" else None
+    raise HTTPException(status_code=410, detail="Processing is owned by the durable worker queue.")
 
 
 class AskRequest(BaseModel):

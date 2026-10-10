@@ -13,6 +13,8 @@ services:
     envVars:
       - key: VECTOR_DB_DIR
         value: /var/data/vector_db
+      - key: MONGO_URI
+        sync: false
       - key: MISTRAL_API_KEY
         sync: false
       - key: SARVAM_API_KEY

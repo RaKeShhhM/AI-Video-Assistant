@@ -23,4 +23,4 @@ ENV PORT=8000
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "python worker.py & worker=$!; trap 'kill $worker 2>/dev/null; wait $worker 2>/dev/null' TERM INT; uvicorn main:app --host 0.0.0.0 --port ${PORT}; status=$?; kill $worker 2>/dev/null; wait $worker 2>/dev/null; exit $status"]

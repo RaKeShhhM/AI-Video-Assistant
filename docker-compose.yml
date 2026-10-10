@@ -15,6 +15,7 @@ services:
     env_file:
       - ./ai-service/.env
     environment:
+      - MONGO_URI=mongodb://mongo:27017/ai-video-assistant
       - EXPRESS_INTERNAL_URL=http://server:5000
       - VECTOR_DB_DIR=/var/data/vector_db
     volumes:

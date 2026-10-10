@@ -28,14 +28,16 @@ external inference service.
 ### Request flow for a new video
 
 1. Client uploads a file or pastes a YouTube URL → `POST /api/videos`.
-2. Express creates a `Job` document (`status: queued`) and responds
-   immediately with the job id.
-3. Express forwards the source to the FastAPI service's `/process` endpoint,
-   which accepts it and runs the pipeline in a background task.
+2. Express stores an uploaded file in MongoDB GridFS (YouTube URLs remain in
+   MongoDB), creates a `Job` document with `status: queued`, and responds
+   immediately with the job id. A temporary request path is never queued.
+3. A separate Python worker polls MongoDB, atomically claims the job with a
+   lease, and runs the pipeline. FastAPI no longer owns processing through
+   in-process `BackgroundTasks`.
 4. After each pipeline stage (download → transcribe → summarize → extract
-   insights → build RAG index), FastAPI POSTs progress back to Express's
-   internal callback route (`/api/internal/jobs/progress`, protected by a
-   shared secret).
+   insights → build RAG index), the worker records a checkpoint in MongoDB and
+   best-effort POSTs progress to Express's internal callback route
+   (`/api/internal/jobs/progress`, protected by a shared secret).
 5. Express updates the `Job` document and emits a `job:update` Socket.io
    event to that user's private room.
 6. The client updates the dashboard and job detail page live — no polling.
@@ -230,7 +232,8 @@ Visit **http://localhost:8000/health** — you should get:
 
 > **Note:** The service exposes three routes:
 > - `GET /health` — health check
-> - `POST /process` — accepts video/YouTube URL, kicks off background pipeline
+> - `POST /process` — legacy AI-service intake; validates the request but returns
+>   410 because processing is accepted durably by Express and the MongoDB worker queue
 > - `POST /ask` — RAG-based Q&A over a processed job
 
 ## Persistent vector indexes (S7)
@@ -276,6 +279,39 @@ and retrieves from it in a fresh process using fixed local embeddings. This
 verifies on-disk reopening, not a live Render deployment or paid-model quality.
 Disk persistence does not make running background jobs durable; worker restart
 recovery, backups, retention/deletion and multi-instance storage remain separate.
+
+## Durable job execution (P1 / R2)
+
+Processing uses MongoDB as the durable queue. Uploaded media is stored in the
+`jobMedia` GridFS bucket with job ownership metadata before the queued job is
+acknowledged. YouTube URLs are stored directly on the job. The Python worker
+streams GridFS media into an attempt-specific temporary workspace, so a queue
+record never depends on an Express temporary-file path.
+
+The worker claims queued jobs atomically and records an attempt ID, worker ID,
+lease expiry, attempt count and stage checkpoint. It heartbeats every 15
+seconds by default; expired leases are requeued with bounded delays of 30
+seconds, 2 minutes and 10 minutes, and jobs become explicitly failed after
+three attempts. These values are configurable with `JOB_LEASE_SECONDS`,
+`JOB_HEARTBEAT_SECONDS`, `JOB_MAX_ATTEMPTS` and `JOB_POLL_SECONDS`. Compose and
+the current single-instance Render deployment run the FastAPI process and one
+worker process against the same MongoDB and persistent vector disk.
+
+This is at-least-once execution. A crash after a paid provider call but before
+its checkpoint can repeat that call and create duplicate provider cost; the
+system does not promise exactly-once external calls. R3 must make callback
+events durable and ordered, and R4 must add legal transition/idempotency guards
+before those guarantees can be considered complete. Callback delivery is still
+best-effort in R2, although the worker's MongoDB checkpoint and terminal state
+survive an Express restart.
+
+The legacy FastAPI `/process` endpoint still validates requests but returns
+`410 Processing is owned by the durable worker queue`; submissions must enter
+through Express so ownership, usage reservations and GridFS persistence are
+recorded together. R2 tests cover expired leases, bounded retry timing,
+terminal failure, and a pipeline failure that cannot remain indefinitely
+`processing`. The tests use mocked providers; actual Render restart/recovery
+evidence has not yet been collected.
 
 ## Configuration startup (P1 / R1)
 

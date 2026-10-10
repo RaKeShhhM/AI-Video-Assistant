@@ -10,6 +10,7 @@ import authRoutes from "./routes/authRoutes.js";
 import internalRoutes from "./routes/internalRoutes.js";
 import videoRoutes from "./routes/videoRoutes.js";
 import { validateInternalSecret } from "./config/internalSecurity.js";
+import { reconcileOrphanJobUploads } from "./services/jobMedia.js";
 
 // Stop before connecting to MongoDB or opening a listening socket.
 validateInternalSecret();
@@ -38,6 +39,7 @@ initSocket(server);
 
 connectDB()
   .then(() => {
+    reconcileOrphanJobUploads().catch((err) => console.error("Job media reconciliation failed:", err.message));
     server.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
   })
   .catch((err) => {

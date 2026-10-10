@@ -1,11 +1,8 @@
-"""
-Orchestrates the existing core/ + utils/ pipeline for one job, posting
-progress callbacks back to the Node/Express server after each stage so the
-UI can show live status via Socket.io.
+"""Run one claimed durable job and report bounded stage progress.
 
-Nothing about the underlying AI logic changes here — this is purely the
-wiring for an in-process, callback-driven background job. It does not
-provide durable execution or restart recovery.
+The worker owns leases, checkpoints and retry decisions. This module keeps the
+AI pipeline provider-focused and returns whether the attempt completed;
+callbacks remain best-effort until R3 makes delivery durable.
 """
 import traceback
 import wave
@@ -36,21 +33,26 @@ def run_pipeline_job(
     source_type: str,
     language: str,
     max_media_seconds: int = MAX_SECONDS,
+    progress_hook=None,
+    send_failure_callback: bool = True,
 ):
     validate_job_id(job_id)
     chunk_paths = []
     workspace = None
+    succeeded = False
 
     def progress(stage: str, percent: int, status: str = "processing", data: dict | None = None):
-        _post_callback(
-            {
-                "job_id": job_id,
-                "status": status,
-                "stage": stage,
-                "percent": percent,
-                "data": data or {},
-            },
-        )
+        payload = {
+            "job_id": job_id,
+            "status": status,
+            "stage": stage,
+            "percent": percent,
+            "data": data or {},
+        }
+        if progress_hook is not None:
+            progress_hook(payload)
+        if status != "failed" or send_failure_callback:
+            _post_callback(payload)
 
     try:
         workspace = MediaWorkspace(job_id)
@@ -85,6 +87,7 @@ def run_pipeline_job(
                 "open_questions": open_questions,
             },
         )
+        succeeded = True
 
         progress("indexing_transcript", 95)
         build_rag_chain(transcript, job_id)  # persists the per-job Chroma collection to disk
@@ -120,3 +123,4 @@ def run_pipeline_job(
                 cleanup_upload(source, source_type)
             except OSError:
                 print("[pipeline] ingress upload cleanup failed")
+    return succeeded
