@@ -21,7 +21,7 @@ class AudioDownloaderTests(unittest.TestCase):
                     return {"ext": "mp4"}
 
                 downloader.extract_info.side_effect = extract_info
-                result = download_youtube_audio("https://www.youtube.com/watch?v=BaW_jenozKc")
+                result = download_youtube_audio("https://www.youtube.com/watch?v=BaW_jenozKc", output_dir=directory)
 
                 self.assertEqual(result, str(final_path))
                 options = factory.call_args.args[0]
@@ -32,16 +32,16 @@ class AudioDownloaderTests(unittest.TestCase):
                 )
 
     def test_missing_output_fails_instead_of_returning_guessed_path(self):
-        with patch("utils.audio_processor.RestrictedYoutubeDL"):
+        with tempfile.TemporaryDirectory() as directory, patch("utils.audio_processor.RestrictedYoutubeDL"):
             with self.assertRaisesRegex(RuntimeError, "did not produce an audio file"):
-                download_youtube_audio("https://www.youtube.com/watch?v=BaW_jenozKc")
+                download_youtube_audio("https://www.youtube.com/watch?v=BaW_jenozKc", output_dir=directory)
 
     def test_download_errors_are_not_hidden(self):
-        with patch("utils.audio_processor.RestrictedYoutubeDL") as factory:
+        with tempfile.TemporaryDirectory() as directory, patch("utils.audio_processor.RestrictedYoutubeDL") as factory:
             downloader = factory.return_value.__enter__.return_value
             downloader.extract_info.side_effect = RuntimeError("HTTP Error 403")
             with self.assertRaisesRegex(RuntimeError, "HTTP Error 403"):
-                download_youtube_audio("https://www.youtube.com/watch?v=BaW_jenozKc")
+                download_youtube_audio("https://www.youtube.com/watch?v=BaW_jenozKc", output_dir=directory)
 
 
 if __name__ == "__main__":

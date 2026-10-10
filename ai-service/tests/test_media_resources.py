@@ -12,7 +12,7 @@ from starlette.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from utils.media_limits import MediaRejected, inspect_media, copy_upload
-from utils.audio_processor import convert_to_wav, chunk_audio, youtube_filter, process_input
+from utils.audio_processor import convert_to_wav, chunk_audio, youtube_filter, process_input, MediaWorkspace
 from utils.request_limits import ProcessLimitsMiddleware
 
 
@@ -90,7 +90,7 @@ class MediaTests(unittest.TestCase):
             source.write_text("bad")
             with patch.dict("os.environ", {"UPLOAD_DIR": str(uploads)}), patch("utils.audio_processor.DOWNLOAD_DIR", str(downloads)):
                 with self.assertRaises(MediaRejected):
-                    process_input(str(source), source_type="upload")
+                    process_input(str(source), source_type="upload", workspace=MediaWorkspace("a" * 24))
             self.assertEqual(list(downloads.iterdir()), [])
 
     def test_youtube_preflight_rejects_unbounded_work(self):

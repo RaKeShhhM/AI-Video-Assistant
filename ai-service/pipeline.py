@@ -4,17 +4,16 @@ progress callbacks back to the Node/Express server after each stage so the
 UI can show live status via Socket.io.
 
 Nothing about the underlying AI logic changes here — this is purely the
-wiring that turns the original CLI script (main.py) into a resumable,
-callback-driven background job.
+wiring for an in-process, callback-driven background job. It does not
+provide durable execution or restart recovery.
 """
-import os
 import traceback
 import wave
 
 from utils.internal_security import post_progress
 from utils.job_ids import validate_job_id
 
-from utils.audio_processor import process_input, cleanup_media
+from utils.audio_processor import process_input, cleanup_upload, MediaWorkspace
 from utils.media_limits import MAX_SECONDS
 from core.transcriber import transcribe_all
 from core.summarizer import summarize, generate_title
@@ -40,6 +39,7 @@ def run_pipeline_job(
 ):
     validate_job_id(job_id)
     chunk_paths = []
+    workspace = None
 
     def progress(stage: str, percent: int, status: str = "processing", data: dict | None = None):
         _post_callback(
@@ -53,8 +53,9 @@ def run_pipeline_job(
         )
 
     try:
+        workspace = MediaWorkspace(job_id)
         progress("downloading_audio", 5)
-        chunk_paths = process_input(source, source_type=source_type, max_seconds=max_media_seconds)
+        chunk_paths = process_input(source, source_type=source_type, workspace=workspace, max_seconds=max_media_seconds)
         duration = 0
         for path in chunk_paths:
             with wave.open(path, "rb") as audio:
@@ -110,6 +111,12 @@ def run_pipeline_job(
 
     finally:
         try:
-            cleanup_media(chunk_paths, source, source_type)
-        except OSError:
+            if workspace is not None:
+                workspace.cleanup()
+        except (OSError, ValueError):
             print("[pipeline] temporary media cleanup failed")
+        finally:
+            try:
+                cleanup_upload(source, source_type)
+            except OSError:
+                print("[pipeline] ingress upload cleanup failed")

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from utils.audio_processor import process_input
+from utils.audio_processor import process_input, MediaWorkspace
 from utils.video_source import normalize_youtube_url, validate_video_source
 
 CASES = json.loads((Path(__file__).resolve().parents[2] / "tests/fixtures/video_sources.json").read_text())
@@ -48,7 +48,7 @@ class VideoSourceTests(unittest.TestCase):
                         process_input(str(external), source_type="upload")
                     convert.assert_not_called()
                     with patch("utils.audio_processor.chunk_audio", return_value=["chunk.wav"]):
-                        self.assertEqual(process_input(str(internal), source_type="upload"), ["chunk.wav"])
+                        self.assertEqual(process_input(str(internal), source_type="upload", workspace=MediaWorkspace("a" * 24)), ["chunk.wav"])
 
     def test_source_type_is_required_and_constrained(self):
         with self.assertRaises(TypeError):

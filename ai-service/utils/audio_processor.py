@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import wave
 from pathlib import Path
+from utils.job_ids import validate_job_id
 from utils.video_source import normalize_youtube_url
 from utils.youtube_network import RestrictedYoutubeDL
 from utils.media_limits import MAX_BYTES, MAX_SECONDS, INPUT_OPTIONS, MediaRejected, inspect_media
@@ -25,7 +26,7 @@ def youtube_filter(info, *, incomplete=False, max_seconds=MAX_SECONDS):
         return "Video exceeds the download size limit."
 
 
-def download_youtube_audio(url: str, *, output_dir=None, max_seconds=MAX_SECONDS) -> str:
+def download_youtube_audio(url: str, *, output_dir, max_seconds=MAX_SECONDS) -> str:
     url = normalize_youtube_url(url)
     downloaded_paths = []
 
@@ -35,7 +36,7 @@ def download_youtube_audio(url: str, *, output_dir=None, max_seconds=MAX_SECONDS
 
     options = {
         "format": "bestaudio[protocol=https]/best[protocol=https]", "proxy": "",
-        "outtmpl": os.path.join(output_dir or DOWNLOAD_DIR, "source.%(ext)s"),
+        "outtmpl": str(Path(output_dir).resolve() / "source.%(ext)s"),
         "js_runtimes": {"deno": {}, "node": {}}, "noplaylist": True,
         "post_hooks": [downloaded_paths.append], "progress_hooks": [check_bytes],
         "max_filesize": MAX_BYTES, "socket_timeout": 15, "retries": 2,
@@ -47,9 +48,12 @@ def download_youtube_audio(url: str, *, output_dir=None, max_seconds=MAX_SECONDS
         ydl.extract_info(url, download=True, ie_key="Youtube")
     if not downloaded_paths or not os.path.isfile(downloaded_paths[-1]):
         raise RuntimeError("YouTube download did not produce an audio file (check duration, size and availability).")
-    if os.path.getsize(downloaded_paths[-1]) > MAX_BYTES:
+    final_path = Path(downloaded_paths[-1]).resolve()
+    if final_path.parent != Path(output_dir).resolve():
+        raise ValueError("Downloaded media escaped its workspace.")
+    if os.path.getsize(final_path) > MAX_BYTES:
         raise MediaRejected("Video exceeds the download size limit.", 413)
-    return downloaded_paths[-1]
+    return str(final_path)
 
 
 def convert_to_wav(input_path: str, *, output_path=None, max_seconds=MAX_SECONDS) -> str:
@@ -87,26 +91,34 @@ def chunk_audio(wav_path: str, chunk_minutes: int = 10) -> list:
     return chunks
 
 
-def remove_workspace(directory):
-    root = Path(DOWNLOAD_DIR).resolve()
-    target = Path(directory).resolve()
-    if target.parent != root or not target.name.startswith("work-"):
-        raise ValueError("Invalid media cleanup directory.")
-    shutil.rmtree(target, ignore_errors=False)
+class MediaWorkspace:
+    """Own one generated directory for one execution, independent of chunk output."""
+
+    def __init__(self, job_id):
+        validate_job_id(job_id)
+        self.root = Path(DOWNLOAD_DIR).resolve()
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.path = Path(tempfile.mkdtemp(prefix=f"work-{job_id}-", dir=self.root))
+
+    def cleanup(self):
+        # Resolve and check the exact target before recursive removal, including
+        # on Windows. Never discover ownership by following returned chunk paths.
+        target = self.path.resolve()
+        if target != self.path or target.parent != self.root:
+            raise ValueError("Invalid media cleanup directory.")
+        if target.exists():
+            shutil.rmtree(target)
 
 
-def cleanup_media(chunks, source, source_type):
-    for directory in {Path(chunk).parent for chunk in chunks}:
-        if directory.exists():
-            remove_workspace(directory)
+def cleanup_upload(source, source_type):
     if source_type == "upload":
         path = Path(source).resolve()
         root = Path(os.getenv("UPLOAD_DIR", "storage/uploads")).resolve()
-        if path.is_relative_to(root):
+        if path.parent == root:
             path.unlink(missing_ok=True)
 
 
-def process_input(source: str, *, source_type: str, max_seconds=MAX_SECONDS) -> list:
+def process_input(source: str, *, source_type: str, workspace=None, max_seconds=MAX_SECONDS) -> list:
     if source_type == "youtube":
         source = normalize_youtube_url(source)
     elif source_type == "upload":
@@ -117,12 +129,20 @@ def process_input(source: str, *, source_type: str, max_seconds=MAX_SECONDS) -> 
         source = str(upload)
     else:
         raise ValueError("Unsupported source type.")
-    work = tempfile.mkdtemp(prefix="work-", dir=DOWNLOAD_DIR)
+    if not isinstance(workspace, MediaWorkspace):
+        raise ValueError("An owned media workspace is required.")
+    work = workspace.path
     try:
         if source_type == "youtube":
             source = download_youtube_audio(source, output_dir=work, max_seconds=max_seconds)
-        wav = convert_to_wav(source, output_path=Path(work) / "audio.wav", max_seconds=max_seconds)
+        else:
+            # The ingress upload is server-generated; its working copy belongs
+            # exclusively to this execution, including concurrent retries.
+            local_source = work / ("source" + Path(source).suffix.lower())
+            shutil.copyfile(source, local_source)
+            source = str(local_source)
+        wav = convert_to_wav(source, output_path=work / "audio.wav", max_seconds=max_seconds)
         return chunk_audio(wav)
     except BaseException:
-        remove_workspace(work)
+        workspace.cleanup()
         raise
