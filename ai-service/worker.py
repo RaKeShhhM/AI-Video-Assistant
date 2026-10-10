@@ -5,6 +5,7 @@ the queue, and leases make a crashed worker recoverable without pretending
 provider calls are exactly-once.
 """
 import logging
+import math
 import os
 import signal
 import socket
@@ -20,10 +21,11 @@ SETTINGS = load_settings()
 
 from gridfs import GridFSBucket
 from pymongo import MongoClient, ReturnDocument
+from pymongo.errors import PyMongoError
 from bson import ObjectId
 
 from pipeline import run_pipeline_job
-from utils.internal_security import post_progress
+from utils.callback_delivery import event_update, delivery_loop, retry_blocked
 
 LOG = logging.getLogger("ai-worker")
 STOP = threading.Event()
@@ -53,25 +55,25 @@ def recover_expired(collection, now=None):
         attempts = int(execution.get("attempts", 0))
         if attempts >= int(execution.get("maxAttempts", MAX_ATTEMPTS)):
             result = collection.update_one(
-                {"_id": job["_id"], "status": "processing", "execution.leaseUntil": {"$lt": now}},
-                {"$set": {
+                {"_id": job["_id"], "status": "processing", "execution.attemptId": execution.get("attemptId"), "execution.leaseUntil": {"$lt": now}},
+                event_update({
                     "status": "failed",
                     "stage": "error",
                     "error": "Processing stopped after the worker lease expired too many times.",
                     "execution.lastError": "worker_lease_expired",
                     "execution.checkpoint": "failed",
-                }},
+                }, now=now),
             )
         else:
             result = collection.update_one(
-                {"_id": job["_id"], "status": "processing", "execution.leaseUntil": {"$lt": now}},
-                {"$set": {
+                {"_id": job["_id"], "status": "processing", "execution.attemptId": execution.get("attemptId"), "execution.leaseUntil": {"$lt": now}},
+                event_update({
                     "status": "queued",
                     "stage": "queued",
                     "execution.nextAttemptAt": now + retry_delay(attempts),
                     "execution.lastError": "worker_lease_expired",
                     "execution.checkpoint": execution.get("checkpoint", "queued"),
-                }, "$unset": {"execution.workerId": "", "execution.attemptId": "", "execution.leaseUntil": ""}},
+                }, now=now, unset={"execution.workerId": "", "execution.leaseUntil": ""}),
             )
         changed += result.modified_count
     return changed
@@ -86,14 +88,16 @@ def claim(collection, now=None):
             "execution.nextAttemptAt": {"$lte": now},
             "$or": [{"execution.attempts": {"$lt": MAX_ATTEMPTS}}, {"execution.attempts": {"$exists": False}}],
         },
-        {"$set": {
+        {**event_update({
             "status": "processing",
-            "stage": "processing",
+            "stage": "downloading_audio",
+            "percent": 0,
+            "error": "",
             "execution.workerId": WORKER_ID,
             "execution.attemptId": attempt_id,
             "execution.leaseUntil": now + timedelta(seconds=LEASE_SECONDS),
             "execution.checkpoint": "processing",
-        }, "$inc": {"execution.attempts": 1}},
+        }, now=now), "$inc": {"execution.attempts": 1, "progressVersion": 1}},
         sort=[("createdAt", 1), ("_id", 1)],
         return_document=ReturnDocument.AFTER,
     )
@@ -121,8 +125,20 @@ def _download_gridfs(db, job, destination):
 
 def _progress_updater(collection, job_id, attempt_id):
     def update(payload):
+        if payload["status"] == "failed":
+            return  # The worker decides retry versus terminal failure.
         data = payload.get("data") or {}
+        text_limits = {"title": 300, "transcript": 1000000, "summary": 100000,
+                       "action_items": 100000, "key_decisions": 100000, "open_questions": 100000}
+        for key, limit in text_limits.items():
+            if key in data and (not isinstance(data[key], str) or len(data[key]) > limit):
+                raise ValueError("Invalid pipeline result field")
+        duration = data.get("duration_seconds")
+        if duration is not None and (isinstance(duration, bool) or not isinstance(duration, (int, float))
+                                    or not math.isfinite(duration) or not 0 < duration <= SETTINGS.max_media_seconds):
+            raise ValueError("Invalid pipeline duration")
         fields = {
+            "status": payload["status"],
             "stage": payload["stage"],
             "percent": payload["percent"],
             "execution.checkpoint": payload["stage"],
@@ -139,10 +155,12 @@ def _progress_updater(collection, job_id, attempt_id):
         for source, target in mapping.items():
             if source in data:
                 fields[target] = data[source]
-        collection.update_one(
-            {"_id": job_id, "status": "processing", "execution.attemptId": attempt_id},
-            {"$set": fields},
+        result = collection.update_one(
+            {"_id": job_id, "status": "processing", "execution.attemptId": attempt_id, "execution.leaseUntil": {"$gt": utcnow()}},
+            event_update(fields),
         )
+        if result.matched_count != 1:
+            raise RuntimeError("worker_lease_lost")
     return update
 
 
@@ -172,11 +190,6 @@ def process_one(db, collection, job):
         )
         if not succeeded:
             raise RuntimeError("pipeline_failed")
-        collection.update_one(
-            {"_id": job_id, "status": "processing", "execution.attemptId": attempt_id},
-            {"$set": {"status": "completed", "stage": "completed", "percent": 100,
-                      "execution.checkpoint": "completed", "execution.leaseUntil": None}},
-        )
     except Exception as exc:
         attempts = int(job["execution"].get("attempts", 1))
         terminal = attempts >= int(job["execution"].get("maxAttempts", MAX_ATTEMPTS))
@@ -191,22 +204,12 @@ def process_one(db, collection, job):
             fields["execution.nextAttemptAt"] = utcnow() + retry_delay(attempts)
         collection.update_one(
             {"_id": job_id, "status": "processing", "execution.attemptId": attempt_id},
-            {"$set": fields, "$unset": {"execution.workerId": "", "execution.attemptId": "", "execution.leaseUntil": ""}},
+            event_update(fields, unset={"execution.workerId": "", "execution.leaseUntil": ""}),
         )
-        if terminal:
-            try:
-                post_progress({
-                    "job_id": str(job_id),
-                    "status": "failed",
-                    "stage": "error",
-                    "percent": 0,
-                    "data": {},
-                })
-            except Exception:
-                LOG.warning("terminal failure callback unavailable id=%s", job_id)
         LOG.exception("job failed id=%s attempt=%s terminal=%s", job_id, attempt_id, terminal)
     finally:
         done.set()
+        heartbeat.join(timeout=2)
         if temporary:
             temporary.unlink(missing_ok=True)
 
@@ -217,15 +220,29 @@ def run():
     jobs = db.jobs
     jobs.create_index([("status", 1), ("execution.nextAttemptAt", 1), ("createdAt", 1)])
     jobs.create_index([("status", 1), ("execution.leaseUntil", 1)])
+    jobs.create_index([("delivery.state", 1), ("delivery.nextAt", 1)])
+    jobs.create_index([("delivery.state", 1), ("delivery.leaseUntil", 1)])
+    import sys
+    if "--retry-callbacks" in sys.argv:
+        print(f"Requeued {retry_blocked(jobs)} blocked callback notifications")
+        client.close()
+        return
+    relay = threading.Thread(target=delivery_loop, args=(jobs, STOP), daemon=True)
+    relay.start()
     LOG.info("worker started id=%s", WORKER_ID)
     while not STOP.is_set():
-        now = utcnow()
-        recover_expired(jobs, now)
-        job = claim(jobs, now)
-        if job:
-            process_one(db, jobs, job)
-        else:
+        try:
+            now = utcnow()
+            recover_expired(jobs, now)
+            job = claim(jobs, now)
+            if job:
+                process_one(db, jobs, job)
+            else:
+                STOP.wait(POLL_SECONDS)
+        except PyMongoError:
+            LOG.exception("queue unavailable; retrying after poll delay")
             STOP.wait(POLL_SECONDS)
+    relay.join(timeout=20)
     client.close()
 
 

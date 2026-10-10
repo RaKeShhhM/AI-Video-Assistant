@@ -62,3 +62,12 @@ export function aiResponse(data, expectedJobId) {
   } catch { throw new ApiError(502, "AI service returned an invalid response.", "AI_INVALID_RESPONSE"); }
   return data;
 }
+
+// R3 callbacks reference the authoritative MongoDB snapshot, never carry results.
+export function callbackInput(body) {
+  object(body, ["job_id", "attempt_id", "sequence"]);
+  const id = jobId(body.job_id);
+  if (typeof body.attempt_id !== "string" || !/^[a-f0-9]{32}$/.test(body.attempt_id)) invalid("Invalid callback attempt ID.");
+  if (!Number.isSafeInteger(body.sequence) || body.sequence < 1) invalid("Invalid callback sequence.");
+  return { ...body, job_id: id };
+}

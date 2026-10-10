@@ -36,7 +36,7 @@ external inference service.
    in-process `BackgroundTasks`.
 4. After each pipeline stage (download → transcribe → summarize → extract
    insights → build RAG index), the worker records a checkpoint in MongoDB and
-   best-effort POSTs progress to Express's internal callback route
+   persists results plus pending notifications in MongoDB and relays versioned callbacks to Express
    (`/api/internal/jobs/progress`, protected by a shared secret).
 5. Express updates the `Job` document and emits a `job:update` Socket.io
    event to that user's private room.
@@ -299,11 +299,9 @@ worker process against the same MongoDB and persistent vector disk.
 
 This is at-least-once execution. A crash after a paid provider call but before
 its checkpoint can repeat that call and create duplicate provider cost; the
-system does not promise exactly-once external calls. R3 must make callback
-events durable and ordered, and R4 must add legal transition/idempotency guards
-before those guarantees can be considered complete. Callback delivery is still
-best-effort in R2, although the worker's MongoDB checkpoint and terminal state
-survive an Express restart.
+system does not promise exactly-once external calls. R3 adds durable, versioned snapshot notifications (see below). R4 still needs
+complete legal transitions and submission/execution idempotency. MongoDB results
+and pending notification state survive an Express restart.
 
 The legacy FastAPI `/process` endpoint still validates requests but returns
 `410 Processing is owned by the durable worker queue`; submissions must enter
@@ -340,3 +338,62 @@ tests do not trigger production startup validation.
 without downloading models or calling providers. This is an additional targeted
 CI job; it does not replace the full local Python regression suite. R1 does not
 introduce a queue, durable workers, callback retries, or restart recovery (R2-R4).
+
+## Recoverable callbacks (P1 / R3)
+
+The worker is authoritative for job state. Each stage/result update atomically
+increments `progressVersion` and writes a pending `delivery` record in the same
+MongoDB job document. There is no gap between saving results and recording that
+Express needs notification. One latest snapshot is retained per job: later
+progress replaces older pending progress, retaining the accumulated result
+fields. This is a coalescing outbox, not an audit log of every stage event.
+
+A separate relay thread continues delivering while the worker processes media.
+The internal callback body now contains only `job_id`, `attempt_id` (32 hex
+characters), and `sequence` (the monotonic per-job `progressVersion`). Transcript
+and result payloads stay in MongoDB rather than crossing the callback body limit.
+Express validates the reference and reads the matching stored snapshot. Old or
+out-of-order notifications are acknowledged as ignored; they never rewrite job
+status/results. Usage finalization is idempotent and finishes before the gateway
+records `callbackAck`. Replaying an acknowledgement lost in transit is safe.
+
+Delivery uses a 60-second claim lease, the existing 15-second HTTP timeout, and
+at most eight attempts per snapshot. Network timeouts, connection failures,
+408/425/429 and 5xx responses retry with exponential delays capped at 60 seconds
+plus jitter. Integer Retry-After values on 429/503 are honored up to 300 seconds.
+Other HTTP errors, redirects, malformed JSON acknowledgements, or exhausted
+retries leave `delivery.state=blocked` with a safe error category. A valid JSON
+acknowledgement with the wrong identity/version is retried within the same budget.
+Results remain readable even if notification delivery is blocked. An interrupted
+relay claim is eligible for redelivery after lease expiry in a fresh process.
+
+Monitor `jobs` filtered by `delivery.state: "blocked"` and callback relay logs.
+After fixing the cause (such as gateway authentication or availability), run
+`python worker.py --retry-callbacks` from `ai-service` with the usual environment.
+It requeues blocked notifications; it does not repeat transcription, indexing or
+provider calls. Pending notifications resume automatically when the worker runs.
+The command retries all blocked notifications in this service's database.
+
+Deploy the Express and worker changes together: stop/drain the old worker,
+deploy the gateway, then start the updated worker. The old callback body is
+intentionally rejected. Existing terminal R2 jobs without an outbox are not
+silently migrated; this change guarantees delivery for updates written by R3.
+Do not run old/new worker versions concurrently during rollout.
+
+The worker now marks success only after indexing and the terminal snapshot save
+succeed. Lease-expiry recovery also persists a pending notification, so exhausted
+jobs can finalize usage when the gateway recovers. All callback retries are
+independent of AI processing retries.
+
+This is durable at-least-once notification with idempotent reconciliation, not
+exactly-once Socket.IO delivery. A gateway crash after recording an acknowledgement
+but before emitting can lose the live event; clients can fetch the persisted job.
+Reconnect/version reconciliation remains F2/R6. Submission deduplication, stale
+workers' external side effects and full cancellation transitions remain R4.
+
+Tests use a temporary real MongoDB, fresh relay processes and the real Express
+callback route to check crash recovery, lost acknowledgements, bounded retries,
+permanent failures, superseded notifications and one-time usage reconciliation.
+CI's `python-worker-tests` job supplies MongoDB and installs the gateway to run
+these integration checks without paid providers. Local tests find `mongod` on
+PATH or accept `CALLBACK_TEST_MONGO_URI`; use only a dedicated test database host.

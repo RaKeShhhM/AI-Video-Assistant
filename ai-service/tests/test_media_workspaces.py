@@ -112,7 +112,7 @@ class WorkspaceTests(unittest.TestCase):
             spec = importlib.util.spec_from_file_location("workspace_test_pipeline", Path(__file__).resolve().parents[1] / "pipeline.py")
             pipeline = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(pipeline)
-        for failure in [False, True]:
+        for failure in [False, "transcription", "indexing"]:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 uploads = root / "uploads"
@@ -125,10 +125,12 @@ class WorkspaceTests(unittest.TestCase):
                     workspace = Path(chunks[0]).parent
                     seen.append(workspace)
                     self.assertTrue((workspace / "source.wav").is_file())
-                    if failure: raise RuntimeError("injected transcription failure")
+                    if failure == "transcription": raise RuntimeError("injected transcription failure")
                     return "fixture transcript"
                 with patch.dict("os.environ", {"UPLOAD_DIR": str(uploads)}), patch("utils.audio_processor.DOWNLOAD_DIR", str(downloads)), patch.object(pipeline, "transcribe_all", side_effect=transcribe), patch.object(pipeline, "_post_callback") as callback, patch.object(pipeline.traceback, "print_exc"), patch("builtins.print"):
-                    pipeline.run_pipeline_job("a" * 24, str(source), "upload", "english")
+                    with patch.object(pipeline, "build_rag_chain", side_effect=RuntimeError("indexing failed") if failure == "indexing" else None):
+                        succeeded = pipeline.run_pipeline_job("a" * 24, str(source), "upload", "english")
+                    self.assertEqual(succeeded, not failure)
                 self.assertTrue(seen)
                 self.assertFalse(seen[0].exists())
                 self.assertFalse(source.exists())

@@ -3,11 +3,10 @@ import { emitJobUpdate } from "../config/socket.js";
 import { askAiService } from "../services/aiService.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { sourceInput, questionInput, jobId, progressInput } from "../utils/contracts.js";
+import { sourceInput, questionInput, jobId, callbackInput } from "../utils/contracts.js";
 import mongoose from "mongoose";
 import { usage } from "../services/usageService.js";
 import { cleanupUpload } from "../middleware/upload.js";
-import { limits } from "../config/resourceLimits.js";
 import { deleteJobUpload, storeJobUpload } from "../services/jobMedia.js";
 
 export const createJob = asyncHandler(async (req, res) => {
@@ -99,34 +98,26 @@ export const askQuestion = asyncHandler(async (req, res) => {
   res.json({ answer, chat: job.chat });
 });
 
-// Called by the AI service (internal, secret-protected) after each pipeline stage.
+// The worker atomically persists the result and pending notification in MongoDB.
+// HTTP callbacks reconcile side effects; they never overwrite worker-owned state.
 export const receiveProgress = asyncHandler(async (req, res) => {
-  const { job_id: jobId, status, stage, percent, data } = progressInput(req.body);
-
-  const job = await Job.findById(jobId);
-  if (!job) {
-    throw new ApiError(404, "Job not found");
+  const event = callbackInput(req.body);
+  const job = await Job.findById(event.job_id);
+  if (!job) throw new ApiError(404, "Job not found");
+  const ack = { received: true, attempt_id: event.attempt_id, sequence: event.sequence };
+  if (job.execution?.attemptId !== event.attempt_id || job.progressVersion !== event.sequence) {
+    return res.json({ ...ack, ignored: true });
   }
-
-  job.status = status || job.status;
-  job.stage = stage || job.stage;
-  job.percent = typeof percent === "number" ? percent : job.percent;
-
-  if (data?.title) job.title = data.title;
-  if (data?.transcript) job.transcript = data.transcript;
-  if (data?.summary) job.summary = data.summary;
-  if (data?.action_items) job.actionItems = data.action_items;
-  if (data?.key_decisions) job.keyDecisions = data.key_decisions;
-  if (data?.open_questions) job.openQuestions = data.open_questions;
-  if (status === "failed") job.error = "AI processing failed. Please try again.";
-  if (Number.isFinite(data?.duration_seconds) && data.duration_seconds > 0 && data.duration_seconds <= limits.mediaSeconds) {
-    job.durationSeconds = data.duration_seconds;
+  if ((job.callbackAck || 0) >= event.sequence) return res.json(ack);
+  // Idempotent reservation removal occurs before ack. If the gateway crashes
+  // here, retry safely repeats it; no lost refund between a DB ack and side effect.
+  if (["completed", "failed"].includes(job.status)) {
+    await usage.finishJob(job.user, job._id, job.durationSeconds);
   }
-
-  await job.save();
-  if (["completed", "failed"].includes(job.status)) await usage.finishJob(job.user, job._id, job.durationSeconds);
-
-  emitJobUpdate(job.user.toString(), job);
-
-  res.json({ received: true });
+  const current = await Job.findOneAndUpdate({
+    _id: job._id, "execution.attemptId": event.attempt_id, progressVersion: event.sequence,
+    $or: [{ callbackAck: { $lt: event.sequence } }, { callbackAck: { $exists: false } }],
+  }, { $set: { callbackAck: event.sequence } }, { new: true });
+  if (current) emitJobUpdate(current.user.toString(), current);
+  res.json(ack);
 });

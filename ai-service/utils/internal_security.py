@@ -65,3 +65,4 @@ def post_progress(payload):
     if 300 <= response.status_code < 400:
         raise RuntimeError("Internal callback redirects are not allowed.")
     response.raise_for_status()
+    return response

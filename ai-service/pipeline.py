@@ -2,7 +2,7 @@
 
 The worker owns leases, checkpoints and retry decisions. This module keeps the
 AI pipeline provider-focused and returns whether the attempt completed;
-callbacks remain best-effort until R3 makes delivery durable.
+the durable worker hook commits results and notification state atomically.
 """
 import traceback
 import wave
@@ -22,6 +22,8 @@ def _post_callback(payload: dict):
     """Best-effort callback to Express. Never let a callback failure crash the job."""
     try:
         post_progress(payload)
+        succeeded = True
+
     except Exception as exc:  # noqa: BLE001
         print(f"[callback] delivery failed ({type(exc).__name__})")
 
@@ -51,7 +53,7 @@ def run_pipeline_job(
         }
         if progress_hook is not None:
             progress_hook(payload)
-        if status != "failed" or send_failure_callback:
+        elif status != "failed" or send_failure_callback:
             _post_callback(payload)
 
     try:
@@ -87,8 +89,6 @@ def run_pipeline_job(
                 "open_questions": open_questions,
             },
         )
-        succeeded = True
-
         progress("indexing_transcript", 95)
         build_rag_chain(transcript, job_id)  # persists the per-job Chroma collection to disk
 
@@ -106,6 +106,8 @@ def run_pipeline_job(
                 "open_questions": open_questions,
             },
         )
+
+        succeeded = True
 
     except Exception as exc:  # noqa: BLE001
         print(f"[pipeline] job {job_id} failed: {exc}")

@@ -46,6 +46,17 @@ const jobSchema = new mongoose.Schema(
       lastError: { type: String },
       checkpoint: { type: String, default: "queued" },
     },
+    progressVersion: { type: Number, default: 0 },
+    callbackAck: { type: Number, default: 0 },
+    delivery: {
+      state: { type: String, enum: ["pending", "sending", "delivered", "blocked"] },
+      attempts: { type: Number },
+      nextAt: { type: Date },
+      leaseUntil: { type: Date },
+      token: { type: String },
+      lastError: { type: String },
+      deliveredAt: { type: Date },
+    },
     transcript: { type: String },
     summary: { type: String },
     actionItems: { type: String },
@@ -59,6 +70,8 @@ const jobSchema = new mongoose.Schema(
     toJSON: {
       transform(_doc, ret) {
         delete ret.sourceArtifact;
+        delete ret.delivery;
+        delete ret.callbackAck;
         if (ret.execution) {
           delete ret.execution.workerId;
           delete ret.execution.attemptId;

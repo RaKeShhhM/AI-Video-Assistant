@@ -103,3 +103,27 @@ class WorkerRecoveryTests(unittest.TestCase):
         self.assertEqual(terminal_update["$set"]["status"], "queued")
         self.assertIn("execution.nextAttemptAt", terminal_update["$set"])
 
+
+    def test_progress_and_outbox_are_one_guarded_update(self):
+        now = datetime.now(timezone.utc)
+        collection = FakeCollection([])
+        update = self.worker._progress_updater(collection, "job-1", "attempt-1")
+        update({"status": "completed", "stage": "completed", "percent": 100, "data": {"summary": "durable result"}})
+        query, change = collection.updates[0]
+        self.assertEqual(query["execution.attemptId"], "attempt-1")
+        self.assertIn("$gt", query["execution.leaseUntil"])
+        self.assertEqual(change["$set"]["status"], "completed")
+        self.assertEqual(change["$set"]["summary"], "durable result")
+        self.assertEqual(change["$set"]["delivery"]["state"], "pending")
+        self.assertEqual(change["$inc"]["progressVersion"], 1)
+        with patch.object(collection, "update_one", return_value=Result(matched_count=0)):
+            with self.assertRaisesRegex(RuntimeError, "lease_lost"):
+                update({"status": "processing", "stage": "transcribing", "percent": 20, "data": {}})
+
+    def test_recovery_also_persists_terminal_notification(self):
+        collection = FakeCollection([{"_id": "job-1", "execution": {"attemptId": "attempt-1", "attempts": 3}}])
+        self.worker.recover_expired(collection)
+        query, change = collection.updates[0]
+        self.assertEqual(query["execution.attemptId"], "attempt-1")
+        self.assertEqual(change["$set"]["delivery"]["state"], "pending")
+        self.assertEqual(change["$inc"]["progressVersion"], 1)
