@@ -32,7 +32,7 @@ export default function JobCard({ job }) {
           </span>
         </div>
 
-        {job.status !== "completed" && job.status !== "failed" && (
+        {["queued", "processing"].includes(job.status) && (
           <div style={{ marginTop: 14 }}>
             <VUProgress status={job.status} stage={job.stage} percent={job.percent} segments={28} />
           </div>

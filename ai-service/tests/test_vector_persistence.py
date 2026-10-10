@@ -25,12 +25,30 @@ job = "a" * 24
 with patch.object(socket.socket, "connect", side_effect=AssertionError("No network")):
     if sys.argv[1] == "write":
         store.build_vector_store("The launch deadline is Friday.", job)
+        # Stable IDs make rebuilds idempotent and remove trailing old chunks.
+        old_attempt, new_attempt = "1" * 32, "2" * 32
+        store.build_vector_store("Old transcript. " * 200, job, old_attempt)
+        fresh = store.build_vector_store("Current transcript.", job, new_attempt)
+        store.build_vector_store("Current transcript.", job, new_attempt)
+        assert len(fresh.get()["ids"]) == 1
+        # A stale worker's late rebuild stays in its own attempt collection.
+        stale = store.build_vector_store("Stale worker result.", job, old_attempt)
+        assert len(stale.get()["ids"]) == 1
+        assert fresh.get()["documents"] == ["Current transcript."]
+        try: store.load_vector_store(job, "../invalid")
+        except ValueError: pass
+        else: raise AssertionError("Invalid generation accepted")
         client = store.local_chroma_client(store._persist_dir("b" * 24))
         client.create_collection(store._collection_name("b" * 24))
         store.local_chroma_client(store._persist_dir("c" * 24))
     else:
         found = store.get_retriever(store.load_vector_store(job)).invoke("What is the launch deadline?")
         assert found[0].page_content == "The launch deadline is Friday."
+        current = store.load_vector_store(job, "2" * 32)
+        assert current.get()["documents"] == ["Current transcript."]
+        try: store.load_vector_store(job, "3" * 32)
+        except IndexRebuildRequired: pass
+        else: raise AssertionError("Missing generation accepted")
         # Existing but empty collection, missing collection, missing directory:
         for missing in ["b" * 24, "c" * 24, "d" * 24]:
             with patch.object(store, "get_embeddings", side_effect=AssertionError("No embeddings for missing indexes")):

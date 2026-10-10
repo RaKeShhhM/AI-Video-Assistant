@@ -28,17 +28,17 @@ test("exactly one source is required, including empty URL fields", () => {
 
 test("controller rejects invalid input before touching MongoDB or forwarding", async () => {
   let databaseCalls = 0;
-  const original = Job.create;
-  Job.create = async () => { databaseCalls++; throw new Error("Unexpected database call"); };
+  const original = Job.findOneAndUpdate;
+  Job.findOneAndUpdate = async () => { databaseCalls++; throw new Error("Unexpected database call"); };
   try {
     for (const youtubeUrl of cases.invalid) {
       const error = await new Promise((resolve) => {
-        createJob({ body: { youtubeUrl }, userId: "test" }, {}, resolve);
+        createJob({ headers: { "idempotency-key": "validation-test-1234" }, body: { youtubeUrl }, userId: "test" }, {}, resolve);
       });
       assert.equal(error.statusCode, 400);
     }
     assert.equal(databaseCalls, 0);
   } finally {
-    Job.create = original;
+    Job.findOneAndUpdate = original;
   }
 });

@@ -37,6 +37,8 @@ def run_pipeline_job(
     max_media_seconds: int = MAX_SECONDS,
     progress_hook=None,
     send_failure_callback: bool = True,
+    index_attempt: str | None = None,
+    ensure_active=None,
 ):
     validate_job_id(job_id)
     chunk_paths = []
@@ -66,7 +68,7 @@ def run_pipeline_job(
                 duration += audio.getnframes() / audio.getframerate()
 
         progress("transcribing", 20, data={"duration_seconds": duration})
-        transcript = transcribe_all(chunk_paths, language)
+        transcript = transcribe_all(chunk_paths, language, ensure_active=ensure_active) if ensure_active else transcribe_all(chunk_paths, language)
         progress("transcript_ready", 45, data={"transcript": transcript})
 
         progress("generating_title", 55)
@@ -78,7 +80,11 @@ def run_pipeline_job(
 
         progress("extracting_insights", 80)
         action_items = extract_action_items(transcript)
+        if ensure_active:
+            ensure_active()
         key_decisions = extract_key_decisions(transcript)
+        if ensure_active:
+            ensure_active()
         open_questions = extract_questions(transcript)
         progress(
             "insights_ready",
@@ -90,7 +96,7 @@ def run_pipeline_job(
             },
         )
         progress("indexing_transcript", 95)
-        build_rag_chain(transcript, job_id)  # persists the per-job Chroma collection to disk
+        build_rag_chain(transcript, job_id, index_attempt) if index_attempt else build_rag_chain(transcript, job_id)
 
         progress(
             "completed",

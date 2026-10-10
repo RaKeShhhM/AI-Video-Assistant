@@ -116,10 +116,16 @@ jobs:
           node-version: '22'
       - run: npm ci --ignore-scripts
         working-directory: server
+      - name: Verify submission idempotency and lifecycle against MongoDB
+        working-directory: server
+        run: node --test test/jobLifecycle.integration.test.js
       - run: python -m pip install python-dotenv pymongo requests
       - name: Verify queue lease recovery without MongoDB or providers
         working-directory: ai-service
         run: python -m unittest discover -s tests -p test_worker_recovery.py -v
+      - name: Verify cancellation between transcription calls
+        working-directory: ai-service
+        run: python -m unittest discover -s tests -p test_transcription_cancellation.py -v
       - name: Verify durable callback delivery against MongoDB
         working-directory: ai-service
         run: python -m unittest discover -s tests -p test_callback_delivery.py -v
@@ -144,6 +150,9 @@ jobs:
       - name: Verify embedded storage boundaries without models or providers
         working-directory: ai-service
         run: python -m unittest discover -s tests -p test_chroma_boundary.py -v
+      - name: Verify index persistence and idempotent rebuilds
+        working-directory: ai-service
+        run: python -m unittest discover -s tests -p test_vector_persistence.py -v
       - name: Resolve and audit the complete requirements graph
         # Do not use --no-deps: requirements have lower bounds, not a lock.
         # Runs the full strict scan; only approved, unexpired exact matches can pass.

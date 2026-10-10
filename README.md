@@ -299,8 +299,8 @@ worker process against the same MongoDB and persistent vector disk.
 
 This is at-least-once execution. A crash after a paid provider call but before
 its checkpoint can repeat that call and create duplicate provider cost; the
-system does not promise exactly-once external calls. R3 adds durable, versioned snapshot notifications (see below). R4 still needs
-complete legal transitions and submission/execution idempotency. MongoDB results
+system does not promise exactly-once external calls. R3 adds durable, versioned
+snapshot notifications; R4 adds submission deduplication and attempt fencing (see below). MongoDB results
 and pending notification state survive an Express restart.
 
 The legacy FastAPI `/process` endpoint still validates requests but returns
@@ -388,8 +388,8 @@ independent of AI processing retries.
 This is durable at-least-once notification with idempotent reconciliation, not
 exactly-once Socket.IO delivery. A gateway crash after recording an acknowledgement
 but before emitting can lose the live event; clients can fetch the persisted job.
-Reconnect/version reconciliation remains F2/R6. Submission deduplication, stale
-workers' external side effects and full cancellation transitions remain R4.
+Reconnect recovery remains F2/R6. R4 below adds submission deduplication,
+cancellation and fences for stale worker result/index writes.
 
 Tests use a temporary real MongoDB, fresh relay processes and the real Express
 callback route to check crash recovery, lost acknowledgements, bounded retries,
@@ -397,3 +397,70 @@ permanent failures, superseded notifications and one-time usage reconciliation.
 CI's `python-worker-tests` job supplies MongoDB and installs the gateway to run
 these integration checks without paid providers. Local tests find `mongod` on
 PATH or accept `CALLBACK_TEST_MONGO_URI`; use only a dedicated test database host.
+
+
+## Job lifecycle and idempotency (P1 / R4)
+
+`POST /api/videos` and `POST /api/videos/:id/retry` require an
+`Idempotency-Key` header (16-128 letters, digits, underscores or hyphens;
+a UUID works). Reuse the key and the same input after a timeout. The upload
+form retains its key while retrying the same input. A new logical submission
+uses a new key. Keys are scoped to the authenticated user; changed input under
+the same key returns `409 IDEMPOTENCY_CONFLICT`. Upload fingerprints include
+the file bytes, filename and language, not the temporary path.
+
+The server derives a stable job ID from the user/key and inserts a non-runnable
+intent before reserving quota or writing GridFS media. Acceptance atomically
+attaches the original media and enables worker claims. Replays return the
+existing job (`200`, `replayed: true`); new acceptance returns `201`.
+Concurrent acceptance returns `409 SUBMISSION_IN_PROGRESS`; retry the same
+request. An interrupted intake lease can be reclaimed after ten minutes.
+Unfinished intents remain at `queued/accepting` and need the original request
+replayed; they never trigger provider work. Quota reservations are idempotent.
+An uncertain database response does not refund quota, delete media, or mark
+accepted work failed. Unreferenced media is handled by the R2 orphan reconciler.
+
+| Current state | Allowed change |
+| --- | --- |
+| queued, accepted | processing (atomic claim), cancelled |
+| processing | forward progress, completed, queued (bounded automatic retry), failed, cancelled |
+| completed | terminal |
+| failed or cancelled | terminal; manual retry creates a new job with `retryOf` |
+
+`POST /api/videos/:id/cancel` is owner-scoped and idempotent. It atomically
+invalidates the attempt, persists a cancellation notification and reconciles
+usage. Completed jobs and unfinished intake cannot be cancelled. Retry creates
+a separately budgeted successor; its idempotency key deduplicates repeated
+clicks. The old job and its callback identity stay terminal. Uploaded retries
+reference the same GridFS source, so cleanup must retain any source referenced
+by another job. Full artifact deletion/retention remains R5.
+
+Workers honor each job's attempt limit. Heartbeats, progress, completion and
+failure writes require a live matching lease; an expired lease cannot be
+resurrected. Progress validates stage/status/percentage and cannot move backwards
+within an attempt. Cancellation/lease checks run before subsequent pipeline
+stages, transcription chunks, Sarvam pieces and insight calls. A provider call
+already in flight may finish, but cannot publish its results after losing
+ownership. Automatic crash retries can still repeat a provider call: external
+providers do not participate in the MongoDB commit.
+
+Vectors use deterministic chunk IDs, remove obsolete chunks on rebuild, and
+live in attempt-specific collections. Completion atomically publishes the
+winning `indexAttempt` alongside results. Chat loads that exact generation;
+stale attempts cannot overwrite it. Legacy completed jobs still read their
+original collection. Old or cancelled index generations are retained for R5
+cleanup. This still requires the existing single-instance persistent disk.
+
+Deploy the updated gateway and FastAPI code before starting the updated worker,
+and stop old workers during rollout. Restart both API and worker processes.
+The frontend now supplies the required submission header and shows Cancel/Retry
+controls. Custom API clients must supply the header too.
+
+Regression coverage includes concurrent submissions, changed-input conflicts,
+GridFS reuse, lost acceptance acknowledgements, expired intake recovery,
+idempotent quota reservations, cancel/retry ownership, stale callbacks, atomic
+worker claims, expired lease fencing, forward-only progress, stable index IDs,
+and isolation between index attempts. Run `npm test` in `server` with
+`S3_MONGOD` set to the local mongod executable, or set `CALLBACK_TEST_MONGO_URI`
+to a dedicated test host. CI runs lifecycle integration against its MongoDB
+service and persisted-vector checks without provider credentials.

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import api from "../lib/api";
 import { getSocket } from "../lib/socket";
 import VUProgress from "../components/VUProgress";
@@ -16,17 +16,37 @@ const TAB_LABELS = {
 
 export default function JobDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
+  const retryKey = useRef(null);
+  const [actionError, setActionError] = useState("");
+  const [acting, setActing] = useState(false);
+  async function act(action) {
+    if (acting) return;
+    setActing(true);
+    setActionError("");
+    if (retryKey.current?.id !== id) retryKey.current = { id, key: crypto.randomUUID() };
+    try {
+      const { data } = await api.post(`/videos/${id}/${action}`, {}, {
+        headers: { "Idempotency-Key": retryKey.current.key },
+      });
+      if (action === "retry") navigate(`/jobs/${data.job._id}`);
+      else setJob(data.job);
+    } catch (error) {
+      setActionError(error.response?.data?.message || "Request interrupted. Try again.");
+    } finally { setActing(false); }
+  }
   const [job, setJob] = useState(null);
   const [tab, setTab] = useState("summary");
 
   useEffect(() => {
     let mounted = true;
-    api.get(`/videos/${id}`).then(({ data }) => mounted && setJob(data.job));
+    setJob(null);
+    api.get(`/videos/${id}`).then(({ data }) => mounted && setJob(prev => !prev || (data.job.progressVersion || 0) >= (prev.progressVersion || 0) ? data.job : prev));
 
     const socket = getSocket();
     function onUpdate(updated) {
       if (updated._id === id) {
-        setJob((prev) => ({ ...prev, ...updated }));
+        setJob((prev) => !prev || (updated.progressVersion || 0) >= (prev.progressVersion || 0) ? { ...prev, ...updated } : prev);
       }
     }
     socket?.on("job:update", onUpdate);
@@ -45,7 +65,7 @@ export default function JobDetail() {
     );
   }
 
-  const isProcessing = job.status !== "completed" && job.status !== "failed";
+  const isProcessing = ["queued", "processing"].includes(job.status);
 
   const tabContent = {
     summary: job.summary,
@@ -67,6 +87,11 @@ export default function JobDetail() {
           <VUProgress status={job.status} stage={job.stage} percent={job.percent} />
         </div>
       )}
+
+      {actionError && <div className="error-banner">{actionError}</div>}
+      {isProcessing && job.stage !== "accepting" && <button className="btn" disabled={acting} onClick={() => act("cancel")}>Cancel processing</button>}
+      {["failed", "cancelled"].includes(job.status) && <button className="btn" disabled={acting} onClick={() => act("retry")}>{acting ? "Starting..." : "Retry as a new job"}</button>}
+      {job.status === "cancelled" && <p className="dim">Processing was cancelled.</p>}
 
       {job.status === "failed" && (
         <div className="error-banner">{job.error || "This job failed to process."}</div>

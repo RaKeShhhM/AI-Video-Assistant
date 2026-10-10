@@ -15,9 +15,9 @@ def get_llm():
 def format_docs(docs):
     return "\n\n".join([doc.page_content for doc in docs])
 
-def build_rag_chain(transcript: str, job_id: str):
+def build_rag_chain(transcript: str, job_id: str, index_attempt: str | None = None):
 
-    vector_store = build_vector_store(transcript, job_id)
+    vector_store = build_vector_store(transcript, job_id, index_attempt)
 
     retriever = get_retriever(vector_store, k = 4)
 
@@ -55,8 +55,8 @@ Context from meeting transcript:
     return rag_chain
 
 
-def load_rag_chain(job_id: str):
-    vector_store = load_vector_store(job_id)
+def load_rag_chain(job_id: str, index_attempt: str | None = None):
+    vector_store = load_vector_store(job_id, index_attempt)
     retriver = get_retriever(vector_store)
 
     llm = get_llm()

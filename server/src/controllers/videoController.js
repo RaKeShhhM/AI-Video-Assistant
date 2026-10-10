@@ -4,47 +4,19 @@ import { askAiService } from "../services/aiService.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sourceInput, questionInput, jobId, callbackInput } from "../utils/contracts.js";
-import mongoose from "mongoose";
+import { randomBytes } from "node:crypto";
 import { usage } from "../services/usageService.js";
 import { cleanupUpload } from "../middleware/upload.js";
-import { deleteJobUpload, storeJobUpload } from "../services/jobMedia.js";
+import { submissionKey, submitJob } from "../services/jobSubmission.js";
 
 export const createJob = asyncHandler(async (req, res) => {
   req.uploadOwnedByController = true;
-  let job;
-  let reserved = false;
-  let media;
-  const jobId = new mongoose.Types.ObjectId();
   try {
-    const { type, youtubeUrl, file, language } = sourceInput(req.body, req.file);
+    const key = submissionKey(req.headers?.["idempotency-key"]);
+    const source = sourceInput(req.body, req.file);
     if (req.aborted) return;
-    await usage.reserveJob(req.userId, jobId);
-    reserved = true;
-
-    if (file) media = await storeJobUpload({
-      path: file.path,
-      filename: file.originalname,
-      contentType: file.mimetype,
-    });
-
-    job = await Job.create({
-      _id: jobId,
-      user: req.userId,
-      sourceType: type,
-      sourceValue: youtubeUrl || file.originalname,
-      language: language || "english",
-      status: "queued",
-      stage: "queued",
-      percent: 0,
-      title: youtubeUrl ? youtubeUrl : file.originalname,
-      sourceArtifact: media,
-    });
-
-    res.status(201).json({ job });
-  } catch (err) {
-    if (media && !job) await deleteJobUpload(media.fileId).catch(() => {});
-    if (reserved && !job) await usage.finishJob(req.userId, jobId, 0);
-    throw err;
+    const result = await submitJob(req.userId, key, source);
+    res.status(result.replayed ? 200 : 201).json(result);
   } finally {
     await cleanupUpload(req).catch(() => console.error("Temporary upload cleanup failed"));
     req.releaseUpload?.();
@@ -70,6 +42,47 @@ export const deleteJob = asyncHandler(async (req, res) => {
   res.json({ message: "Job deleted" });
 });
 
+// Terminal jobs stay immutable. A manual retry creates a separately budgeted
+// successor, so an old callback can never refund or overwrite the new run.
+export const retryJob = asyncHandler(async (req, res) => {
+  const key = submissionKey(req.headers?.["idempotency-key"]);
+  const previous = await Job.findOne({ _id: jobId(req.params.id), user: req.userId });
+  if (!previous) throw new ApiError(404, "Job not found");
+  if (!["failed", "cancelled"].includes(previous.status)) {
+    throw new ApiError(409, "Only failed or cancelled jobs can be retried.", "INVALID_JOB_TRANSITION");
+  }
+  if (previous.sourceType === "upload" && !previous.sourceArtifact?.fileId) {
+    throw new ApiError(409, "The original upload is unavailable. Upload the file again.", "SOURCE_UNAVAILABLE");
+  }
+  await usage.finishJob(previous.user, previous._id, previous.durationSeconds);
+  const result = await submitJob(req.userId, key, {
+    type: previous.sourceType, youtubeUrl: previous.sourceType === "youtube" ? previous.sourceValue : undefined,
+    artifact: previous.sourceArtifact, language: previous.language, retryOf: previous._id,
+  });
+  res.status(result.replayed ? 200 : 201).json(result);
+});
+
+export const cancelJob = asyncHandler(async (req, res) => {
+  const _id = jobId(req.params.id);
+  const now = new Date();
+  let job = await Job.findOneAndUpdate({ _id, user: req.userId,
+    status: { $in: ["queued", "processing"] }, "execution.ready": { $ne: false },
+  }, { $set: {
+    status: "cancelled", stage: "cancelled", error: "Processing was cancelled.",
+    "execution.checkpoint": "cancelled", "execution.attemptId": randomBytes(16).toString("hex"),
+    delivery: { state: "pending", attempts: 0, nextAt: now },
+  }, $inc: { progressVersion: 1 }, $unset: { "execution.leaseUntil": "", "execution.workerId": "" } }, { new: true });
+  if (!job) {
+    job = await Job.findOne({ _id, user: req.userId });
+    if (!job) throw new ApiError(404, "Job not found");
+    if (job.status !== "cancelled") throw new ApiError(409, "This job can no longer be cancelled.", "INVALID_JOB_TRANSITION");
+  }
+  // The durable notification retries quota reconciliation if this request fails.
+  await usage.finishJob(job.user, job._id, job.durationSeconds);
+  emitJobUpdate(String(job.user), job);
+  res.json({ job });
+});
+
 export const askQuestion = asyncHandler(async (req, res) => {
   const question = questionInput(req.body);
 
@@ -82,7 +95,7 @@ export const askQuestion = asyncHandler(async (req, res) => {
   await usage.reserveQuestion(req.userId);
   let answer;
   try {
-    answer = await askAiService(job._id.toString(), question.trim());
+    answer = await askAiService(job._id.toString(), question.trim(), job.indexAttempt);
   } catch (err) {
     if (err.response?.status === 409 && err.response.data?.code === "INDEX_REBUILD_REQUIRED") {
       throw new ApiError(409, "This video's search index is unavailable. Submit the video again to rebuild it.", "INDEX_REBUILD_REQUIRED");
@@ -111,7 +124,7 @@ export const receiveProgress = asyncHandler(async (req, res) => {
   if ((job.callbackAck || 0) >= event.sequence) return res.json(ack);
   // Idempotent reservation removal occurs before ack. If the gateway crashes
   // here, retry safely repeats it; no lost refund between a DB ack and side effect.
-  if (["completed", "failed"].includes(job.status)) {
+  if (["completed", "failed", "cancelled"].includes(job.status)) {
     await usage.finishJob(job.user, job._id, job.durationSeconds);
   }
   const current = await Job.findOneAndUpdate({

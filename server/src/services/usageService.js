@@ -22,12 +22,13 @@ export function createUsageService(model = ResourceUsage, config = limits, clock
       await ensure(user);
       const now = clock();
       const e = expressions(now);
-      const result = await model.findOneAndUpdate({ _id: String(user), $expr: { $and: [
+      const existing = { $in: [String(jobId), { $map: { input: e.active, as: "j", in: "$$j.jobId" } }] };
+      const result = await model.findOneAndUpdate({ _id: String(user), $expr: { $or: [existing, { $and: [
         { $lt: [{ $size: e.active }, config.activeJobsPerUser] },
         { $lte: [{ $add: [e.seconds, config.mediaSeconds] }, config.dailySeconds] },
-      ] } }, [{ $set: { day: e.day, secondsReserved: { $add: [e.seconds, config.mediaSeconds] },
-        questions: e.questions, activeJobs: { $concatArrays: [e.active, [{ jobId: String(jobId), day: e.day,
-          seconds: config.mediaSeconds, expiresAt: new Date(now.getTime() + config.leaseMs) }]] },
+      ] }] } }, [{ $set: { day: e.day, secondsReserved: { $cond: [existing, e.seconds, { $add: [e.seconds, config.mediaSeconds] }] },
+        questions: e.questions, activeJobs: { $cond: [existing, e.active, { $concatArrays: [e.active, [{ jobId: String(jobId), day: e.day,
+          seconds: config.mediaSeconds, expiresAt: new Date(now.getTime() + config.leaseMs) }]] }] },
       } }], { new: true });
       if (!result) throw new ApiError(429, "Active-job limit or daily processing budget reached. Wait for your job to finish or for the UTC daily reset.");
     },

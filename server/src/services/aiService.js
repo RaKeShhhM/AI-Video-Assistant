@@ -39,10 +39,10 @@ export async function forwardProcessJob({ jobId, language, youtubeUrl, file }) {
   } finally { stream?.destroy(); }
 }
 
-export async function askAiService(jobId, question) {
+export async function askAiService(jobId, question, indexAttempt) {
   const { data } = await axios.post(
     `${AI_SERVICE_URL}/ask`,
-    { job_id: jobId, question },
+    { job_id: jobId, question, ...(indexAttempt ? { index_attempt: indexAttempt } : {}) },
     { timeout: 60000, maxContentLength: 262144, maxRedirects: 0, headers: { "X-Internal-Secret": validateInternalSecret() } }
   );
   return aiResponse(data).answer;

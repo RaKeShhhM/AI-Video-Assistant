@@ -18,7 +18,7 @@ const jobSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["queued", "processing", "completed", "failed"],
+      enum: ["queued", "processing", "completed", "failed", "cancelled"],
       default: "queued",
       index: true,
     },
@@ -36,7 +36,15 @@ const jobSchema = new mongoose.Schema(
       size: { type: Number },
       sha256: { type: String },
     },
+    retryOf: { type: mongoose.Schema.Types.ObjectId, ref: "Job" },
+    indexAttempt: { type: String },
+    submission: {
+      fingerprint: String,
+      token: String,
+      leaseUntil: Date,
+    },
     execution: {
+      ready: { type: Boolean, default: true },
       attempts: { type: Number, default: 0 },
       maxAttempts: { type: Number, default: 3 },
       nextAttemptAt: { type: Date, default: Date.now },
@@ -70,6 +78,8 @@ const jobSchema = new mongoose.Schema(
     toJSON: {
       transform(_doc, ret) {
         delete ret.sourceArtifact;
+        delete ret.submission;
+        delete ret.indexAttempt;
         delete ret.delivery;
         delete ret.callbackAck;
         if (ret.execution) {

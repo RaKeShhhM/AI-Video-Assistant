@@ -53,14 +53,14 @@ def _send_to_sarvam(piece_path: str) -> str:
         )
 
     if not response.ok:
-        print(f"\n❌ Sarvam returned {response.status_code}")
+        print(f"\nSarvam returned {response.status_code}")
         print(f"Response body: {response.text}\n")
         response.raise_for_status()
 
     return response.json().get("transcript", "")
 
 
-def transcribe_chunk_sarvam(chunk_path: str) -> str:
+def transcribe_chunk_sarvam(chunk_path: str, ensure_active=None) -> str:
     """
     Sarvam sync API only accepts ≤30s audio. We split this chunk into
     25-second pieces, send each separately, and join the transcripts.
@@ -75,12 +75,14 @@ def transcribe_chunk_sarvam(chunk_path: str) -> str:
     total_pieces = (len(audio) + piece_ms - 1) // piece_ms
 
     for i, start in enumerate(range(0, len(audio), piece_ms)):
+        if ensure_active:
+            ensure_active()
         piece = audio[start: start + piece_ms]
         piece_path = f"{chunk_path}_sv_{i}.wav"
         piece.export(piece_path, format="wav")
 
         try:
-            print(f"  → Sarvam piece {i + 1}/{total_pieces} ...")
+            print(f"  Sarvam piece {i + 1}/{total_pieces} ...")
             full_text += _send_to_sarvam(piece_path) + " "
         finally:
             if os.path.exists(piece_path):
@@ -92,18 +94,18 @@ def transcribe_chunk_sarvam(chunk_path: str) -> str:
 
 
 
-def transcribe_chunk(chunk_path: str, language: str = "english") -> str:
+def transcribe_chunk(chunk_path: str, language: str = "english", ensure_active=None) -> str:
     """
     Route one chunk to Whisper or Sarvam depending on language choice.
     - english  → Whisper (local model)
     - hinglish → Sarvam (translates to English while transcribing)
     """
     if language.lower() == "hinglish":
-        return transcribe_chunk_sarvam(chunk_path)
+        return transcribe_chunk_sarvam(chunk_path, ensure_active=ensure_active)
     return transcribe_chunk_whisper(chunk_path)
 
 
-def transcribe_all(chunks: list, language: str = "english") -> str:
+def transcribe_all(chunks: list, language: str = "english", ensure_active=None) -> str:
 
     full_transcript = "" 
 
@@ -114,7 +116,9 @@ def transcribe_all(chunks: list, language: str = "english") -> str:
 
         print(f"Transcribing chunk {i + 1}/{len(chunks)}...")
 
-        text = transcribe_chunk(chunk, language=language)  
+        if ensure_active:
+            ensure_active()
+        text = transcribe_chunk(chunk, language=language, ensure_active=ensure_active)
 
         full_transcript += text + " "  
 

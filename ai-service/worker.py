@@ -86,7 +86,8 @@ def claim(collection, now=None):
         {
             "status": "queued",
             "execution.nextAttemptAt": {"$lte": now},
-            "$or": [{"execution.attempts": {"$lt": MAX_ATTEMPTS}}, {"execution.attempts": {"$exists": False}}],
+            "execution.ready": {"$ne": False},
+            "$expr": {"$lt": [{"$ifNull": ["$execution.attempts", 0]}, {"$ifNull": ["$execution.maxAttempts", MAX_ATTEMPTS]}]},
         },
         {**event_update({
             "status": "processing",
@@ -105,12 +106,26 @@ def claim(collection, now=None):
 
 def _heartbeat(collection, job_id, attempt_id, done):
     while not done.wait(HEARTBEAT_SECONDS):
-        result = collection.update_one(
-            {"_id": job_id, "status": "processing", "execution.attemptId": attempt_id},
-            {"$set": {"execution.leaseUntil": utcnow() + timedelta(seconds=LEASE_SECONDS)}},
-        )
-        if result.matched_count != 1:
-            return
+        try:
+            result = collection.update_one(
+                _owned(job_id, attempt_id),
+                {"$set": {"execution.leaseUntil": utcnow() + timedelta(seconds=LEASE_SECONDS)}},
+            )
+            if result.matched_count != 1:
+                return
+        except PyMongoError:
+            LOG.warning("heartbeat unavailable for job %s", job_id)
+            # Progress/provider boundaries still fail closed against the lease.
+
+
+def _owned(job_id, attempt_id):
+    return {"_id": job_id, "status": "processing", "execution.attemptId": attempt_id,
+            "execution.leaseUntil": {"$gt": utcnow()}}
+
+
+def _assert_active(collection, job_id, attempt_id):
+    if not collection.find_one(_owned(job_id, attempt_id), {"_id": 1}):
+        raise RuntimeError("worker_lease_lost")
 
 
 def _download_gridfs(db, job, destination):
@@ -119,6 +134,7 @@ def _download_gridfs(db, job, destination):
     if not file_id:
         raise RuntimeError("job upload artifact is missing")
     bucket = GridFSBucket(db, bucket_name=artifact.get("bucket", "jobMedia"))
+    destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("wb") as output:
         bucket.download_to_stream(ObjectId(file_id), output)
 
@@ -127,6 +143,13 @@ def _progress_updater(collection, job_id, attempt_id):
     def update(payload):
         if payload["status"] == "failed":
             return  # The worker decides retry versus terminal failure.
+        stages = {"downloading_audio": 5, "transcribing": 20, "transcript_ready": 45,
+                  "generating_title": 55, "summarizing": 65, "summary_ready": 72,
+                  "extracting_insights": 80, "insights_ready": 90, "indexing_transcript": 95, "completed": 100}
+        expected_status = "completed" if payload["stage"] == "completed" else "processing"
+        if (payload["status"] != expected_status or payload["stage"] not in stages
+                or payload["percent"] != stages[payload["stage"]]):
+            raise ValueError("Invalid pipeline transition")
         data = payload.get("data") or {}
         text_limits = {"title": 300, "transcript": 1000000, "summary": 100000,
                        "action_items": 100000, "key_decisions": 100000, "open_questions": 100000}
@@ -143,6 +166,8 @@ def _progress_updater(collection, job_id, attempt_id):
             "percent": payload["percent"],
             "execution.checkpoint": payload["stage"],
         }
+        if payload["status"] == "completed":
+            fields["indexAttempt"] = attempt_id
         mapping = {
             "title": "title",
             "transcript": "transcript",
@@ -156,7 +181,7 @@ def _progress_updater(collection, job_id, attempt_id):
             if source in data:
                 fields[target] = data[source]
         result = collection.update_one(
-            {"_id": job_id, "status": "processing", "execution.attemptId": attempt_id, "execution.leaseUntil": {"$gt": utcnow()}},
+            {**_owned(job_id, attempt_id), "percent": {"$lte": payload["percent"]}},
             event_update(fields),
         )
         if result.matched_count != 1:
@@ -187,6 +212,8 @@ def process_one(db, collection, job):
             SETTINGS.max_media_seconds,
             progress_hook=_progress_updater(collection, job_id, attempt_id),
             send_failure_callback=False,
+            index_attempt=attempt_id,
+            ensure_active=lambda: _assert_active(collection, job_id, attempt_id),
         )
         if not succeeded:
             raise RuntimeError("pipeline_failed")
@@ -203,7 +230,7 @@ def process_one(db, collection, job):
         if not terminal:
             fields["execution.nextAttemptAt"] = utcnow() + retry_delay(attempts)
         collection.update_one(
-            {"_id": job_id, "status": "processing", "execution.attemptId": attempt_id},
+            _owned(job_id, attempt_id),
             event_update(fields, unset={"execution.workerId": "", "execution.leaseUntil": ""}),
         )
         LOG.exception("job failed id=%s attempt=%s terminal=%s", job_id, attempt_id, terminal)

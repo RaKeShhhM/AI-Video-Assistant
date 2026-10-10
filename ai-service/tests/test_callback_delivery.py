@@ -73,6 +73,39 @@ class CallbackDeliveryTests(unittest.TestCase):
         response.json.return_value = {"received": True, **payload}
         return response
 
+    def test_worker_lifecycle_fences_with_real_mongodb(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from test_worker_recovery import WorkerRecoveryTests
+        WorkerRecoveryTests.setUpClass()
+        worker = WorkerRecoveryTests.worker
+        self.jobs.delete_many({})
+        queued = {"_id": self.id, "status": "queued", "percent": 0,
+                  "execution": {"ready": False, "attempts": 0, "maxAttempts": 1, "nextAttemptAt": self.now}}
+        self.jobs.insert_one(queued)
+        self.assertIsNone(worker.claim(self.jobs))  # unaccepted intent is never runnable
+        self.jobs.update_one({"_id": self.id}, {"$set": {"execution.ready": True}})
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            claims = list(pool.map(lambda _: worker.claim(self.jobs), range(12)))
+        claimed = [job for job in claims if job]
+        self.assertEqual(len(claimed), 1)
+        attempt = claimed[0]["execution"]["attemptId"]
+        progress = worker._progress_updater(self.jobs, self.id, attempt)
+        progress({"status": "processing", "stage": "transcript_ready", "percent": 45})
+        with self.assertRaisesRegex(RuntimeError, "lease_lost"):
+            progress({"status": "processing", "stage": "transcribing", "percent": 20})
+        with self.assertRaises(ValueError):
+            progress({"status": "queued", "stage": "completed", "percent": 100})
+        self.jobs.update_one({"_id": self.id}, {"$set": {"execution.leaseUntil": self.now - timedelta(seconds=1)}})
+        self.assertEqual(self.jobs.update_one(worker._owned(self.id, attempt), {"$set": {"execution.leaseUntil": self.now + timedelta(minutes=2)}}).matched_count, 0)
+        with self.assertRaisesRegex(RuntimeError, "lease_lost"):
+            progress({"status": "completed", "stage": "completed", "percent": 100})
+        self.assertEqual(worker.recover_expired(self.jobs), 1)
+        self.assertEqual(self.jobs.find_one()["status"], "failed")  # honors per-job limit of one
+        self.assertIsNone(worker.claim(self.jobs))
+        self.jobs.update_one({"_id": self.id}, {"$set": {"status": "cancelled"}})
+        with self.assertRaisesRegex(RuntimeError, "lease_lost"):
+            worker._assert_active(self.jobs, self.id, attempt)
+
     def test_success_deduplicates_and_keeps_result(self):
         send = Mock(side_effect=self.ack)
         self.assertTrue(deliver_one(self.jobs, now=self.now, send=send))

@@ -4,6 +4,8 @@ import { rateLimit } from "../middleware/rateLimit.js";
 import { limits, mediaExtensions } from "../config/resourceLimits.js";
 import {
   askQuestion,
+  cancelJob,
+  retryJob,
   createJob,
   deleteJob,
   getJob,
@@ -21,6 +23,8 @@ router.post("/", rateLimit({ max: 10, windowMs: 3600000 }), uploadMedia, createJ
 router.get("/", listJobs);
 router.get("/:id", getJob);
 router.delete("/:id", deleteJob);
+router.post("/:id/cancel", cancelJob);
+router.post("/:id/retry", rateLimit({ max: 10, windowMs: 3600000 }), retryJob);
 router.post("/:id/ask", rateLimit({ max: 20, windowMs: 60000 }), askQuestion);
 
 export default router;

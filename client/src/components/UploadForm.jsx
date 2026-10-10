@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../lib/api";
 
 export default function UploadForm() {
+  const submission = useRef(null);
   const [mode, setMode] = useState("youtube"); // "youtube" | "upload"
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [file, setFile] = useState(null);
@@ -34,6 +35,11 @@ export default function UploadForm() {
       return;
     }
 
+    if (submitting) return;
+    const previous = submission.current;
+    if (!previous || previous.mode !== mode || previous.url !== youtubeUrl.trim() || previous.file !== file || previous.language !== language) {
+      submission.current = { mode, url: youtubeUrl.trim(), file, language, key: crypto.randomUUID() };
+    }
     setSubmitting(true);
     try {
       const form = new FormData();
@@ -45,7 +51,7 @@ export default function UploadForm() {
       }
 
       const { data } = await api.post("/videos", form, {
-        headers: { "Content-Type": "multipart/form-data" },
+        headers: { "Content-Type": "multipart/form-data", "Idempotency-Key": submission.current.key },
       });
       navigate(`/jobs/${data.job._id}`);
     } catch (err) {

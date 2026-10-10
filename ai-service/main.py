@@ -123,6 +123,7 @@ class AskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     job_id: str = Field(pattern=r"^[a-f0-9]{24}$")
     question: str = Field(min_length=1, max_length=2000)
+    index_attempt: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
 
 
 class AskResponse(BaseModel):
@@ -137,7 +138,7 @@ def ask(payload: AskRequest):
     if not ask_slots.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="AI chat capacity is full. Try again later.", headers={"Retry-After": "60"})
     try:
-        rag_chain = load_rag_chain(payload.job_id)
+        rag_chain = load_rag_chain(payload.job_id, payload.index_attempt) if payload.index_attempt else load_rag_chain(payload.job_id)
         answer = ask_question(rag_chain, payload.question)
         if not isinstance(answer, str) or not answer.strip() or len(answer) > 50000:
             raise ValueError("Invalid provider answer")
