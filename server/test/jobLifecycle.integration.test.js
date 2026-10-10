@@ -11,7 +11,7 @@ import Job from "../src/models/Job.js";
 import ResourceUsage from "../src/models/ResourceUsage.js";
 import { usage } from "../src/services/usageService.js";
 import { submissionKey, submitJob } from "../src/services/jobSubmission.js";
-import { cancelJob, retryJob, receiveProgress } from "../src/controllers/videoController.js";
+import { cancelJob, deleteJob, getJob, retryJob, receiveProgress } from "../src/controllers/videoController.js";
 
 const source = { type: "youtube", youtubeUrl: "https://www.youtube.com/watch?v=BaW_jenozKc", language: "english" };
 async function invoke(handler, req) {
@@ -65,7 +65,7 @@ test("durable submissions and lifecycle fences", { skip: !process.env.S3_MONGOD 
       await Promise.all(Array.from({ length: 10 }, () => usage.reserveJob(user, replay.job._id)));
       assert.equal((await ResourceUsage.findById(String(user))).secondsReserved, budget.secondsReserved);
     });
-    await t.test("uploaded content replays reuse one GridFS object and reject changed bytes", async () => {
+    await t.test("uploaded replays reuse one object; retry clones it for independent deletion", async () => {
       const user = new mongoose.Types.ObjectId();
       const filePath = path.join(tmpdir(), `r4-media-${user}.wav`);
       const input = { type: "upload", language: "english", file: { path: filePath, originalname: "sample.wav", mimetype: "audio/wav" } };
@@ -80,8 +80,8 @@ test("durable submissions and lifecycle fences", { skip: !process.env.S3_MONGOD 
         await Job.updateOne({ _id: first.job._id }, { $set: { status: "failed" } });
         await usage.finishJob(user, first.job._id, 0);
         const retried = await invoke(retryJob, { userId: user, params: { id: String(first.job._id) }, headers: { "idempotency-key": "retry-upload-key-123" } });
-        assert.equal(String(retried.job.sourceArtifact.fileId), String(first.job.sourceArtifact.fileId));
-        assert.equal(await mongoose.connection.db.collection("jobMedia.files").countDocuments(), 1);
+        assert.notEqual(String(retried.job.sourceArtifact.fileId), String(first.job.sourceArtifact.fileId));
+        assert.equal(await mongoose.connection.db.collection("jobMedia.files").countDocuments(), 2);
       } finally { await unlink(filePath); }
     });
     await t.test("lost acceptance response is reconciled without a refund or another job", async st => {
@@ -135,6 +135,31 @@ test("durable submissions and lifecycle fences", { skip: !process.env.S3_MONGOD 
       await assert.rejects(invoke(cancelJob, { ...req, userId: new mongoose.Types.ObjectId() }), { statusCode: 404 });
       await Job.updateOne({ _id: retry._id }, { $set: { status: "completed" } });
       await assert.rejects(invoke(cancelJob, { ...req, params: { id: String(retry._id) } }), { code: "INVALID_JOB_TRANSITION" });
+    });
+    await t.test("delete fences processing, is owner-scoped, and leaves retryable state", async () => {
+      const user = new mongoose.Types.ObjectId();
+      const { job } = await submitJob(user, "delete-process-key-123", source);
+      const originalAttempt = "a".repeat(32);
+      await Job.updateOne({ _id: job._id }, { $set: {
+        status: "processing", "execution.attemptId": originalAttempt,
+        "execution.leaseUntil": new Date(Date.now() + 60000),
+      } });
+      const req = { userId: user, params: { id: String(job._id) } };
+      await assert.rejects(invoke(deleteJob, { ...req, userId: new mongoose.Types.ObjectId() }), { statusCode: 404 });
+      const marked = (await invoke(deleteJob, req)).job;
+      assert.equal(marked.status, "deleting");
+      assert.equal(marked.deletion.activeAttemptId, originalAttempt);
+      assert.equal((await invoke(deleteJob, req)).job.status, "deleting");
+      assert.equal((await invoke(receiveProgress, { body: { job_id: String(job._id), attempt_id: originalAttempt, sequence: marked.progressVersion } })).ignored, true);
+      assert.equal((await ResourceUsage.findById(String(user))).activeJobs.length, 0);
+      assert.equal((await Job.findById(job._id)).execution.ready, false);
+      await assert.rejects(submitJob(user, "delete-process-key-123", source), { code: "JOB_DELETED" });
+      await Job.updateOne({ _id: job._id }, { $set: { "deletion.state": "failed", "deletion.lastError": "PermissionError" } });
+      assert.equal((await invoke(getJob, req)).job.deletion.lastError, "PermissionError");
+      assert.equal((await invoke(deleteJob, req)).job.deletion.state, "pending");
+      await Job.updateOne({ _id: job._id }, { $set: { status: "deleted" } });
+      await assert.rejects(invoke(getJob, req), { statusCode: 404 });
+      assert.equal((await invoke(deleteJob, req)).message, "Job deleted");
     });
   } finally {
     if (mongoose.connection.readyState === 1) await mongoose.connection.dropDatabase();

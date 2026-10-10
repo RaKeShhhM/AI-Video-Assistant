@@ -11,6 +11,7 @@ import {
   getJob,
   listJobs,
 } from "../controllers/videoController.js";
+import { retentionDays } from "../services/jobSubmission.js";
 import { requireAuth } from "../middleware/auth.js";
 
 const router = Router();
@@ -18,7 +19,7 @@ const router = Router();
 router.use(requireAuth);
 
 router.get("/limits", (req, res) => res.json({ maxUploadBytes: limits.uploadBytes, maxMediaSeconds: limits.mediaSeconds,
-  extensions: mediaExtensions, dailyMediaMinutes: limits.dailySeconds / 60, dailyQuestions: limits.dailyQuestions }));
+  extensions: mediaExtensions, dailyMediaMinutes: limits.dailySeconds / 60, dailyQuestions: limits.dailyQuestions, retentionDays }));
 router.post("/", rateLimit({ max: 10, windowMs: 3600000 }), uploadMedia, createJob);
 router.get("/", listJobs);
 router.get("/:id", getJob);

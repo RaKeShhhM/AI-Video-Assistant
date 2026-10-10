@@ -15,9 +15,9 @@ def get_llm():
 def format_docs(docs):
     return "\n\n".join([doc.page_content for doc in docs])
 
-def build_rag_chain(transcript: str, job_id: str, index_attempt: str | None = None):
+def build_rag_chain(transcript: str, job_id: str, index_attempt: str | None = None, ensure_active=None):
 
-    vector_store = build_vector_store(transcript, job_id, index_attempt)
+    vector_store = build_vector_store(transcript, job_id, index_attempt, ensure_active=ensure_active)
 
     retriever = get_retriever(vector_store, k = 4)
 

@@ -23,7 +23,7 @@ export default function JobCard({ job }) {
               color:
                 job.status === "completed"
                   ? "var(--accent-2)"
-                  : job.status === "failed"
+                  : ["failed", "deleting"].includes(job.status)
                   ? "var(--danger)"
                   : "var(--accent)",
             }}
@@ -32,6 +32,9 @@ export default function JobCard({ job }) {
           </span>
         </div>
 
+        {job.status === "deleting" && <p className="dim" style={{ marginTop: 12 }}>
+          {job.deletion?.state === "failed" ? "Cleanup needs a retry. Open this job." : "Deleting stored data..."}
+        </p>}
         {["queued", "processing"].includes(job.status) && (
           <div style={{ marginTop: 14 }}>
             <VUProgress status={job.status} stage={job.stage} percent={job.percent} segments={28} />

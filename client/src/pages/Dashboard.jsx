@@ -11,12 +11,14 @@ export default function Dashboard() {
   useEffect(() => {
     let mounted = true;
 
-    api.get("/videos").then(({ data }) => {
+    const load = () => api.get("/videos").then(({ data }) => {
       if (mounted) {
         setJobs(data.jobs);
         setLoading(false);
       }
     });
+    load();
+    const refresh = setInterval(load, 10000);
 
     const socket = getSocket();
     function onUpdate(updated) {
@@ -32,6 +34,7 @@ export default function Dashboard() {
 
     return () => {
       mounted = false;
+      clearInterval(refresh);
       socket?.off("job:update", onUpdate);
     };
   }, []);

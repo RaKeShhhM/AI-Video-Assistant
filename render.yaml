@@ -50,6 +50,8 @@ services:
         sync: false
       - key: CLIENT_ORIGIN
         sync: false   # set to the client's Render URL, e.g. https://ai-video-assistant-client.onrender.com
+      - key: JOB_RETENTION_DAYS
+        value: 30
       - key: PORT
         value: 5000
 

@@ -33,7 +33,7 @@ def event_update(fields, *, now=None, unset=None):
 def deliver_one(jobs, *, now=None, send=post_progress):
     now = now or now_utc()
     token = uuid.uuid4().hex
-    job = jobs.find_one_and_update({"$or": [
+    job = jobs.find_one_and_update({"status": {"$nin": ["deleting", "deleted"]}, "$or": [
         {"delivery.state": "pending", "delivery.nextAt": {"$lte": now}},
         {"delivery.state": "sending", "delivery.leaseUntil": {"$lte": now}},
     ]}, {"$set": {"delivery.state": "sending", "delivery.token": token,
@@ -46,7 +46,7 @@ def deliver_one(jobs, *, now=None, send=post_progress):
     payload = {"job_id": str(job["_id"]), "attempt_id": job.get("execution", {}).get("attemptId"),
                "sequence": job["progressVersion"]}
     # A response to an old event must never clear a new event's pending marker.
-    owned = {"_id": job["_id"], "progressVersion": payload["sequence"], "delivery.token": token}
+    owned = {"_id": job["_id"], "status": {"$nin": ["deleting", "deleted"]}, "progressVersion": payload["sequence"], "delivery.token": token}
     attempts = job["delivery"]["attempts"]
     retryable, category, retry_after = True, "invalid_ack", 0
     if attempts <= MAX_DELIVERIES:
@@ -97,5 +97,5 @@ def delivery_loop(jobs, stop):
 
 def retry_blocked(jobs):
     """Operator-triggered retry after repairing the cause; never rerun AI work."""
-    return jobs.update_many({"delivery.state": "blocked"}, {"$set": {
+    return jobs.update_many({"status": {"$nin": ["deleting", "deleted"]}, "delivery.state": "blocked"}, {"$set": {
         "delivery.state": "pending", "delivery.attempts": 0, "delivery.nextAt": now_utc()}}).modified_count

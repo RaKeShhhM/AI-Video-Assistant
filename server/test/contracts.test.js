@@ -91,6 +91,10 @@ test("provider failures never enter chat", async t => {
   const job = { _id: id, user: id, status: "processing", chat: [], save: async () => {} };
   t.mock.method(Job, "findById", async () => job);
   t.mock.method(Job, "findOne", async () => job);
+  t.mock.method(Job, "findOneAndUpdate", async (_filter, update) => {
+    job.chat.push(update.$push.chat);
+    return job;
+  });
   t.mock.method(usage, "finishJob", async () => {});
   t.mock.method(usage, "reserveQuestion", async () => {});
   const invoke = async (handler, body) => {

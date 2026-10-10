@@ -126,6 +126,12 @@ jobs:
       - name: Verify cancellation between transcription calls
         working-directory: ai-service
         run: python -m unittest discover -s tests -p test_transcription_cancellation.py -v
+      - name: Verify vector writer and cleanup lock across processes
+        working-directory: ai-service
+        run: python -m unittest discover -s tests -p test_job_lock.py -v
+      - name: Verify deletion, retention and artifact ownership against MongoDB
+        working-directory: ai-service
+        run: python -m unittest discover -s tests -p test_deletion.py -v
       - name: Verify durable callback delivery against MongoDB
         working-directory: ai-service
         run: python -m unittest discover -s tests -p test_callback_delivery.py -v

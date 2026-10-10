@@ -41,6 +41,13 @@ with patch.object(socket.socket, "connect", side_effect=AssertionError("No netwo
         client = store.local_chroma_client(store._persist_dir("b" * 24))
         client.create_collection(store._collection_name("b" * 24))
         store.local_chroma_client(store._persist_dir("c" * 24))
+    elif sys.argv[1] == "delete":
+        store.delete_vector_store(job)
+        assert not Path(store._persist_dir(job, create=False)).exists()
+        assert Path(store._persist_dir("b" * 24, create=False)).exists()
+        try: store.load_vector_store(job)
+        except IndexRebuildRequired: pass
+        else: raise AssertionError("Deleted index loaded")
     else:
         found = store.get_retriever(store.load_vector_store(job)).invoke("What is the launch deadline?")
         assert found[0].page_content == "The launch deadline is Friday."
@@ -65,7 +72,7 @@ class VectorPersistenceTests(unittest.TestCase):
     def test_fresh_process_retrieves_persisted_index_and_missing_indexes_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             env = {**os.environ, "VECTOR_DB_DIR": directory}
-            for mode in ["write", "read"]:
+            for mode in ["write", "read", "delete"]:
                 result = subprocess.run([sys.executable, "-c", SCRIPT, mode], cwd=BASE,
                     env=env, capture_output=True, text=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

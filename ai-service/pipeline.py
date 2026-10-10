@@ -96,7 +96,7 @@ def run_pipeline_job(
             },
         )
         progress("indexing_transcript", 95)
-        build_rag_chain(transcript, job_id, index_attempt) if index_attempt else build_rag_chain(transcript, job_id)
+        build_rag_chain(transcript, job_id, index_attempt, ensure_active=ensure_active) if index_attempt else build_rag_chain(transcript, job_id)
 
         progress(
             "completed",

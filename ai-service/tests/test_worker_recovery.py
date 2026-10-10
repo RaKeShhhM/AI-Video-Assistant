@@ -99,7 +99,10 @@ class WorkerRecoveryTests(unittest.TestCase):
         with patch.object(self.worker, "run_pipeline_job", return_value=False):
             self.worker.process_one(Mock(), collection, job)
         self.assertTrue(collection.updates)
-        terminal_update = collection.updates[-1][1]
+        terminal_update = next(
+            change for _query, change in reversed(collection.updates)
+            if change.get("$set", {}).get("status")
+        )
         self.assertEqual(terminal_update["$set"]["status"], "queued")
         self.assertIn("execution.nextAttemptAt", terminal_update["$set"])
 

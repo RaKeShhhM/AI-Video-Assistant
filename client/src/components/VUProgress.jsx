@@ -2,6 +2,7 @@ const STAGE_LABELS = {
   queued: "Queued",
   accepting: "Saving submission",
   cancelled: "Cancelled",
+  deleting: "Deleting",
   downloading_audio: "Downloading audio",
   transcribing: "Transcribing",
   transcript_ready: "Transcript ready",

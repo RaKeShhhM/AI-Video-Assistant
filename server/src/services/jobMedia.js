@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
+import { pipeline } from "node:stream/promises";
 import { stat } from "node:fs/promises";
 import mongoose from "mongoose";
 
@@ -41,6 +42,24 @@ export async function storeJobUpload({ path, filename, contentType }) {
     size: metadata.size,
     sha256: digest,
   };
+}
+
+export async function cloneJobUpload(artifact) {
+  if (!artifact?.fileId || artifact.bucket !== BUCKET_NAME) throw new Error("Source media unavailable");
+  const sourceId = new mongoose.Types.ObjectId(artifact.fileId);
+  const exists = await mongoose.connection.db.collection(`${BUCKET_NAME}.files`).findOne({ _id: sourceId }, { projection: { _id: 1 } });
+  if (!exists) throw new Error("Source media unavailable");
+  const id = new mongoose.Types.ObjectId();
+  const output = bucket().openUploadStreamWithId(id, artifact.filename, {
+    contentType: artifact.contentType, metadata: { owner: "job", purpose: "processing-input" },
+  });
+  try {
+    await pipeline(bucket().openDownloadStream(sourceId), output);
+  } catch (error) {
+    await bucket().delete(id).catch(() => {});
+    throw error;
+  }
+  return { ...(artifact.toObject?.() || artifact), fileId: id };
 }
 
 export async function deleteJobUpload(fileId) {

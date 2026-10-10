@@ -24,7 +24,7 @@ export const createJob = asyncHandler(async (req, res) => {
 });
 
 export const listJobs = asyncHandler(async (req, res) => {
-  const jobs = await Job.find({ user: req.userId })
+  const jobs = await Job.find({ user: req.userId, status: { $ne: "deleted" } })
     .sort({ createdAt: -1 })
     .select("-transcript -chat");
   res.json({ jobs });
@@ -32,14 +32,40 @@ export const listJobs = asyncHandler(async (req, res) => {
 
 export const getJob = asyncHandler(async (req, res) => {
   const job = await Job.findOne({ _id: jobId(req.params.id), user: req.userId });
-  if (!job) throw new ApiError(404, "Job not found");
+  if (!job || job.status === "deleted") throw new ApiError(404, "Job not found");
   res.json({ job });
 });
 
 export const deleteJob = asyncHandler(async (req, res) => {
-  const job = await Job.findOneAndDelete({ _id: jobId(req.params.id), user: req.userId });
-  if (!job) throw new ApiError(404, "Job not found");
-  res.json({ message: "Job deleted" });
+  const _id = jobId(req.params.id);
+  const now = new Date();
+  const invalidated = randomBytes(16).toString("hex");
+  let job = await Job.findOneAndUpdate({ _id, user: req.userId,
+    status: { $nin: ["deleting", "deleted"] },
+  }, [{ $set: {
+    status: "deleting", stage: "deleting", "execution.ready": false,
+    "deletion.state": "pending", "deletion.requestedAt": now, "deletion.nextAt": now,
+    "deletion.activeAttemptId": "$execution.attemptId",
+    "deletion.workerStoppedAt": { $cond: [{ $eq: ["$status", "processing"] }, null, now] },
+    "deletion.waitUntil": { $ifNull: ["$execution.leaseUntil", now] },
+    "deletion.attempts": 0, "deletion.lastError": "",
+    "execution.attemptId": invalidated, "execution.leaseUntil": null,
+    "submission.token": null, "submission.leaseUntil": null,
+    progressVersion: { $add: [{ $ifNull: ["$progressVersion", 0] }, 1] },
+  } }, { $unset: ["delivery"] }], { new: true });
+  if (!job) {
+    job = await Job.findOne({ _id, user: req.userId });
+    if (!job) throw new ApiError(404, "Job not found");
+    if (job.status === "deleted") return res.json({ message: "Job deleted" });
+    if (job.deletion?.state === "failed") {
+      job = await Job.findOneAndUpdate({ _id, user: req.userId, status: "deleting", "deletion.state": "failed" },
+        { $set: { "deletion.state": "pending", "deletion.nextAt": now, "deletion.attempts": 0, "deletion.lastError": "" } }, { new: true }) || job;
+    }
+  }
+  // The tombstone remains authoritative if quota reconciliation times out.
+  await usage.finishJob(req.userId, _id, job.durationSeconds);
+  emitJobUpdate(String(req.userId), job);
+  res.status(202).json({ job });
 });
 
 // Terminal jobs stay immutable. A manual retry creates a separately budgeted
@@ -105,10 +131,10 @@ export const askQuestion = asyncHandler(async (req, res) => {
     throw new ApiError(502, "AI chat is temporarily unavailable. Please try again.");
   }
 
-  job.chat.push({ question: question.trim(), answer });
-  await job.save();
-
-  res.json({ answer, chat: job.chat });
+  const saved = await Job.findOneAndUpdate({ _id: job._id, user: req.userId, status: "completed" },
+    { $push: { chat: { question: question.trim(), answer } } }, { new: true });
+  if (!saved) throw new ApiError(409, "This job was deleted while the answer was being prepared.", "JOB_DELETING");
+  res.json({ answer, chat: saved.chat });
 });
 
 // The worker atomically persists the result and pending notification in MongoDB.

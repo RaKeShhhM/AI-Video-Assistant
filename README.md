@@ -277,8 +277,9 @@ Deployment acceptance (must be performed on the actual deployed service):
 The automated persistence test writes an index in one Python process, exits,
 and retrieves from it in a fresh process using fixed local embeddings. This
 verifies on-disk reopening, not a live Render deployment or paid-model quality.
-Disk persistence does not make running background jobs durable; worker restart
-recovery, backups, retention/deletion and multi-instance storage remain separate.
+Disk persistence does not replace the durable MongoDB job queue; backups and
+multi-instance vector storage remain separate operational concerns. R2 covers
+worker restart recovery, and R5 covers retention and deletion cleanup.
 
 ## Durable job execution (P1 / R2)
 
@@ -432,8 +433,8 @@ invalidates the attempt, persists a cancellation notification and reconciles
 usage. Completed jobs and unfinished intake cannot be cancelled. Retry creates
 a separately budgeted successor; its idempotency key deduplicates repeated
 clicks. The old job and its callback identity stay terminal. Uploaded retries
-reference the same GridFS source, so cleanup must retain any source referenced
-by another job. Full artifact deletion/retention remains R5.
+clone the GridFS source, so each successor can be deleted independently.
+R5 adds artifact deletion and retention below.
 
 Workers honor each job's attempt limit. Heartbeats, progress, completion and
 failure writes require a live matching lease; an expired lease cannot be
@@ -448,8 +449,7 @@ Vectors use deterministic chunk IDs, remove obsolete chunks on rebuild, and
 live in attempt-specific collections. Completion atomically publishes the
 winning `indexAttempt` alongside results. Chat loads that exact generation;
 stale attempts cannot overwrite it. Legacy completed jobs still read their
-original collection. Old or cancelled index generations are retained for R5
-cleanup. This still requires the existing single-instance persistent disk.
+original collection. Old or cancelled index generations are removed by R5 cleanup. This still requires the existing single-instance persistent disk.
 
 Deploy the updated gateway and FastAPI code before starting the updated worker,
 and stop old workers during rollout. Restart both API and worker processes.
@@ -464,3 +464,40 @@ and isolation between index attempts. Run `npm test` in `server` with
 `S3_MONGOD` set to the local mongod executable, or set `CALLBACK_TEST_MONGO_URI`
 to a dedicated test host. CI runs lifecycle integration against its MongoDB
 service and persisted-vector checks without provider credentials.
+
+
+## Deletion and retention (P1 / R5)
+
+New jobs expire after 30 days by default (`JOB_RETENTION_DAYS`, 1-3650).
+Existing jobs without an expiry remain until manually deleted. The Python
+worker scans for expired jobs hourly. `DELETE /api/videos/:id` is owner-scoped,
+idempotent and returns `202` while cleanup runs. It first marks the job
+`deleting` and invalidates its worker attempt and submission token. Queue claims,
+callbacks and result writes can no longer update the job. The worker waits for
+the active attempt to stop or its lease to expire, then removes the whole job
+vector directory, owned download/conversion workspace, temporary GridFS copy,
+and original GridFS upload. A per-job OS lock orders vector writing and deletion.
+
+Cleanup is retried with backoff after a crash or temporary file/database error.
+After eight failed attempts, the job remains `deleting` with
+`deletion.state: failed` and a short error type. The dashboard shows it and the
+Delete action queues another attempt. Cleanup is safe to repeat if a previous
+attempt removed some artifacts. Once complete, content fields are erased and a
+minimal `deleted` tombstone remains so the same idempotency key cannot recreate
+the job. The list and detail routes hide completed tombstones. Uploaded manual
+retries clone their source into a separate GridFS object; older shared uploads
+are retained until their last referencing job is deleted. The hourly orphan scan
+also removes unreferenced GridFS files left by crashes or concurrent cleanup.
+
+Media workspaces are removed in pipeline `finally` and on partial preparation
+failure; deletion also scans the entire job workspace rather than only known
+chunks. A worker killed mid-operation leaves temporary scratch until the job
+is deleted; stale scratch is reconciled hourly after 24 hours when no live processing lease owns it. The worker and API must
+share MongoDB and the worker must access the persistent vector disk. On Windows,
+Chroma can hold a SQLite file open: deletion then stays visible and retryable
+until the handle is released, such as after a service restart.
+
+R5 integration tests use a disposable MongoDB and temporary scratch roots to
+verify ownership, partial cleanup, retry, retention expiry and terminal content
+scrubbing. Vector persistence tests verify deletion from a fresh process without
+loading an embedding model or making provider calls.

@@ -1,10 +1,12 @@
 import os
 import re
+import shutil
 from pathlib import Path
 from chromadb.errors import NotFoundError
 from utils.index_errors import IndexRebuildRequired
 from utils.job_ids import validate_job_id
 from utils.chroma_local import local_chroma_client
+from utils.job_lock import vector_job_lock
 from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -46,7 +48,7 @@ def _persist_dir(job_id: str, *, create=True) -> str:
     return str(path)
 
 
-def build_vector_store(transcript: str, job_id: str, index_attempt: str | None = None) -> Chroma:
+def build_vector_store(transcript: str, job_id: str, index_attempt: str | None = None, ensure_active=None) -> Chroma:
     validate_job_id(job_id)
     collection_name = _collection_name(job_id, index_attempt)
     print(f"Building vector store for job {job_id}")
@@ -62,6 +64,16 @@ def build_vector_store(transcript: str, job_id: str, index_attempt: str | None =
         for i, chunk in enumerate(chunks)
     ]
 
+    with vector_job_lock(CHROMA_BASE_DIR, job_id):
+        if ensure_active:
+            ensure_active()
+        vector_store = _write_chunks(job_id, collection_name, docs, ids)
+        if ensure_active:
+            ensure_active()
+    return vector_store
+
+
+def _write_chunks(job_id, collection_name, docs, ids):
     embeddings = get_embeddings()
     vector_store = Chroma.from_documents(
         documents=docs,
@@ -78,6 +90,22 @@ def build_vector_store(transcript: str, job_id: str, index_attempt: str | None =
     if stale:
         vector_store.delete(ids=list(stale))
     return vector_store
+
+
+def delete_vector_store(job_id: str):
+    """Remove all legacy and attempt collections plus on-disk data for a job."""
+    validate_job_id(job_id)
+    with vector_job_lock(CHROMA_BASE_DIR, job_id):
+        path = Path(_persist_dir(job_id, create=False))
+        if not path.exists():
+            return
+        root = Path(CHROMA_BASE_DIR).resolve()
+        target = path.resolve()
+        if target.parent != root or target.name != job_id:
+            raise ValueError("Invalid vector cleanup directory")
+        # Chroma may keep a SQLite handle on Windows. Leave the job in a
+        # retryable failed-cleanup state if the directory cannot be removed.
+        shutil.rmtree(target)
 
 
 def load_vector_store(job_id: str, index_attempt: str | None = None) -> Chroma:

@@ -110,6 +110,7 @@ export default function UploadForm() {
       {policy && <p className="dim" style={{ fontSize: 12, marginBottom: 16 }}>
         Up to {policy.maxUploadBytes / 1024 / 1024} MB and {policy.maxMediaSeconds / 60} minutes per video.
         Daily limits: {policy.dailyMediaMinutes} processing minutes and {policy.dailyQuestions} questions.
+        Stored videos are deleted after {policy.retentionDays} days.
       </p>}
 
       <div className="field">

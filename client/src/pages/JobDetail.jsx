@@ -20,6 +20,19 @@ export default function JobDetail() {
   const retryKey = useRef(null);
   const [actionError, setActionError] = useState("");
   const [acting, setActing] = useState(false);
+  async function remove() {
+    if (acting) return;
+    if (job.status !== "deleting" && !window.confirm("Delete this video, transcript, chat and search index? This cannot be undone.")) return;
+    setActing(true);
+    setActionError("");
+    try {
+      const { data } = await api.delete(`/videos/${id}`);
+      if (data.job) setJob(data.job);
+      else navigate("/");
+    } catch (error) {
+      setActionError(error.response?.data?.message || "Deletion could not be scheduled. Try again.");
+    } finally { setActing(false); }
+  }
   async function act(action) {
     if (acting) return;
     setActing(true);
@@ -41,7 +54,12 @@ export default function JobDetail() {
   useEffect(() => {
     let mounted = true;
     setJob(null);
-    api.get(`/videos/${id}`).then(({ data }) => mounted && setJob(prev => !prev || (data.job.progressVersion || 0) >= (prev.progressVersion || 0) ? data.job : prev));
+    api.get(`/videos/${id}`).then(({ data }) => mounted && setJob(prev => !prev || (data.job.progressVersion || 0) >= (prev.progressVersion || 0) ? data.job : prev)).catch(() => mounted && navigate("/"));
+    const refresh = setInterval(() => {
+      api.get(`/videos/${id}`).then(({ data }) => {
+        if (mounted && data.job.status === "deleting") setJob(data.job);
+      }).catch(error => { if (mounted && error.response?.status === 404) navigate("/"); });
+    }, 5000);
 
     const socket = getSocket();
     function onUpdate(updated) {
@@ -53,6 +71,7 @@ export default function JobDetail() {
 
     return () => {
       mounted = false;
+      clearInterval(refresh);
       socket?.off("job:update", onUpdate);
     };
   }, [id]);
@@ -77,7 +96,7 @@ export default function JobDetail() {
 
   return (
     <div className="container" style={{ paddingTop: 40, paddingBottom: 80 }}>
-      <h2 style={{ fontSize: 24, marginBottom: 4 }}>{job.title}</h2>
+      <h2 style={{ fontSize: 24, marginBottom: 4 }}>{job.title || "Deleting video"}</h2>
       <p className="dim mono" style={{ fontSize: 12, marginBottom: 28 }}>
         {job.sourceType === "youtube" ? job.sourceValue : "Uploaded file"} · {job.language}
       </p>
@@ -89,6 +108,10 @@ export default function JobDetail() {
       )}
 
       {actionError && <div className="error-banner">{actionError}</div>}
+      {job.status === "deleting" && <p className="dim">Deleting stored media, transcript and search index. This may take a moment.</p>}
+      {job.status === "deleting" && job.deletion?.state === "failed" && <div className="error-banner">Cleanup needs another attempt ({job.deletion.lastError}).</div>}
+      {job.status !== "deleting" && <button className="btn" disabled={acting} onClick={remove}>Delete video</button>}
+      {job.status === "deleting" && job.deletion?.state === "failed" && <button className="btn" disabled={acting} onClick={remove}>Retry deletion</button>}
       {isProcessing && job.stage !== "accepting" && <button className="btn" disabled={acting} onClick={() => act("cancel")}>Cancel processing</button>}
       {["failed", "cancelled"].includes(job.status) && <button className="btn" disabled={acting} onClick={() => act("retry")}>{acting ? "Starting..." : "Retry as a new job"}</button>}
       {job.status === "cancelled" && <p className="dim">Processing was cancelled.</p>}

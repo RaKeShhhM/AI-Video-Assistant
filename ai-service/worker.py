@@ -26,6 +26,7 @@ from bson import ObjectId
 
 from pipeline import run_pipeline_job
 from utils.callback_delivery import event_update, delivery_loop, retry_blocked
+from utils.deletion import cleanup_one, expire_jobs, reconcile_stale_scratch, reconcile_orphan_media
 
 LOG = logging.getLogger("ai-worker")
 STOP = threading.Event()
@@ -239,6 +240,13 @@ def process_one(db, collection, job):
         heartbeat.join(timeout=2)
         if temporary:
             temporary.unlink(missing_ok=True)
+        try:
+            collection.update_one({"_id": job_id, "status": "deleting",
+                                   "deletion.activeAttemptId": attempt_id},
+                                  {"$set": {"deletion.workerStoppedAt": utcnow(),
+                                            "deletion.nextAt": utcnow()}})
+        except PyMongoError:
+            LOG.warning("could not acknowledge stopped deletion worker id=%s", job_id)
 
 
 def run():
@@ -257,9 +265,20 @@ def run():
     relay = threading.Thread(target=delivery_loop, args=(jobs, STOP), daemon=True)
     relay.start()
     LOG.info("worker started id=%s", WORKER_ID)
+    last_retention_scan = None
     while not STOP.is_set():
         try:
             now = utcnow()
+            if last_retention_scan is None or (now - last_retention_scan).total_seconds() >= 3600:
+                expire_jobs(jobs, now)
+                try:
+                    reconcile_stale_scratch(jobs, SETTINGS.download_dir, SETTINGS.upload_dir, now=now)
+                    reconcile_orphan_media(db, jobs, now=now)
+                except OSError:
+                    LOG.exception("stale scratch reconciliation failed")
+                last_retention_scan = now
+            if cleanup_one(db, jobs, SETTINGS.download_dir, SETTINGS.upload_dir, now=now):
+                continue
             recover_expired(jobs, now)
             job = claim(jobs, now)
             if job:
