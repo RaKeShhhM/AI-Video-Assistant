@@ -1,5 +1,7 @@
 import os
 from pathlib import Path
+from chromadb.errors import NotFoundError
+from utils.index_errors import IndexRebuildRequired
 from utils.job_ids import validate_job_id
 from utils.chroma_local import local_chroma_client
 from langchain_chroma import Chroma
@@ -30,13 +32,14 @@ def _collection_name(job_id: str) -> str:
     return f"job_{job_id}"
 
 
-def _persist_dir(job_id: str) -> str:
+def _persist_dir(job_id: str, *, create=True) -> str:
     validate_job_id(job_id)
     root = Path(CHROMA_BASE_DIR).resolve()
     path = (root / job_id).resolve()
     if not path.is_relative_to(root):
         raise ValueError("Vector storage must stay inside the configured directory.")
-    os.makedirs(path, exist_ok=True)
+    if create:
+        os.makedirs(path, exist_ok=True)
     return str(path)
 
 
@@ -65,14 +68,24 @@ def build_vector_store(transcript: str, job_id: str) -> Chroma:
 
 def load_vector_store(job_id: str) -> Chroma:
     validate_job_id(job_id)
-    embeddings = get_embeddings()
-    vector_store = Chroma(
+    path = Path(_persist_dir(job_id, create=False))
+    # Do not let a read initialize an empty database after an ephemeral-disk loss.
+    if not (path / "chroma.sqlite3").is_file():
+        raise IndexRebuildRequired()
+    client = local_chroma_client(str(path))
+    try:
+        collection = client.get_collection(_collection_name(job_id))
+    except NotFoundError as exc:
+        raise IndexRebuildRequired() from exc
+    if collection.count() == 0:
+        raise IndexRebuildRequired()
+    return Chroma(
         collection_name=_collection_name(job_id),
-        embedding_function=embeddings,
-        client=local_chroma_client(_persist_dir(job_id)),
+        embedding_function=get_embeddings(),
+        client=client,
+        create_collection_if_not_exists=False,
     )
 
-    return vector_store
 
 def get_retriever(vector_store : Chroma, k :int = 4):
     return vector_store.as_retriever(

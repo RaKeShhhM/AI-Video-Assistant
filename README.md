@@ -232,3 +232,47 @@ Visit **http://localhost:8000/health** — you should get:
 > - `GET /health` — health check
 > - `POST /process` — accepts video/YouTube URL, kicks off background pipeline
 > - `POST /ask` — RAG-based Q&A over a processed job
+
+## Persistent vector indexes (S7)
+
+Render's AI private service now declares a 1 GiB disk mounted at `/var/data`
+with `VECTOR_DB_DIR=/var/data/vector_db`. Compose uses a named `vector_data`
+volume at the same path. Downloads/uploads remain temporary. Local Python runs
+keep the `.env` default `storage/vector_db` unless explicitly overridden.
+
+This is a single-instance deployment. Render disks survive redeploys and
+restarts, but cannot be shared between service instances and prevent
+zero-downtime deployments. Disk provisioning has a cost; the repository change
+does not provision it. See [Render persistent disks](https://render.com/docs/disks)
+and [Blueprint disk configuration](https://render.com/docs/blueprint-spec).
+
+Existing indexes are **not automatically migrated** when the storage path changes.
+Before switching an existing deployment, pause processing and make a consistent
+backup of the complete old `VECTOR_DB_DIR` with the AI process stopped, then copy
+its job-ID directories (including SQLite and index files) into the new directory.
+Do not copy a live SQLite database or remove the original until retrieval from
+the new location is verified. Alternatively, resubmit the videos to build new
+indexes. For Compose, migrate old `ai-service/storage/vector_db` contents into
+the named volume before relying on older completed jobs. `docker compose down`
+retains named volumes; `docker compose down -v` deletes them.
+
+If a job directory/database/collection is missing or the collection is empty,
+asking returns HTTP 409 with code `INDEX_REBUILD_REQUIRED`, without calling the
+answer provider or creating an empty collection. The existing chat error banner
+asks the user to submit the video again. This does not implement an in-place
+rebuild API. Other storage/provider errors retain the sanitized service error.
+
+Deployment acceptance (must be performed on the actual deployed service):
+
+1. Apply the disk/volume configuration and verify `VECTOR_DB_DIR` points inside
+   its mount. Confirm adequate free disk space.
+2. Process a permitted short video and ask a question; record the job ID.
+3. Restart/redeploy only the AI service, retaining its disk/volume and MongoDB.
+4. Ask against that same job and confirm retrieval succeeds.
+5. Test the missing-index response using a disposable job on a test deployment.
+
+The automated persistence test writes an index in one Python process, exits,
+and retrieves from it in a fresh process using fixed local embeddings. This
+verifies on-disk reopening, not a live Render deployment or paid-model quality.
+Disk persistence does not make running background jobs durable; worker restart
+recovery, backups, retention/deletion and multi-instance storage remain separate.

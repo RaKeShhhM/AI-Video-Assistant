@@ -211,3 +211,13 @@ class ProcessEndpointTests(unittest.TestCase):
             self.assertEqual(response.status_code, 400)
         self.worker.assert_not_called()
         self.rag.load_rag_chain.assert_not_called()
+
+    def test_missing_index_returns_rebuild_required_without_provider_call(self):
+        self.rag.load_rag_chain.side_effect = self.module.IndexRebuildRequired()
+        try:
+            response = self.client.post("/ask", json={"job_id": JOB_ID, "question": "test"})
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.json()["code"], "INDEX_REBUILD_REQUIRED")
+            self.rag.ask_question.assert_not_called()
+        finally:
+            self.rag.load_rag_chain.side_effect = None

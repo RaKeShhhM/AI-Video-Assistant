@@ -16,8 +16,10 @@ services:
       - ./ai-service/.env
     environment:
       - EXPRESS_INTERNAL_URL=http://server:5000
+      - VECTOR_DB_DIR=/var/data/vector_db
     volumes:
       - ./ai-service:/app
+      - vector_data:/var/data
 
   server:
     build: ./server
@@ -49,3 +51,4 @@ services:
 
 volumes:
   mongo_data:
+  vector_data:

@@ -112,6 +112,12 @@ test("callbacks preserve valid results and provider failures never enter chat", 
   post.mock.mockImplementation(async () => ({ data: { answer: {} } }));
   assert.equal((await invoke(askQuestion, { question: "test" })).error.code, "AI_INVALID_RESPONSE");
   assert.equal(job.chat.length, 0);
+  post.mock.mockImplementation(async () => { throw { response: { status: 409, data: { code: "INDEX_REBUILD_REQUIRED", detail: "private internal path" } } }; });
+  const missing = (await invoke(askQuestion, { question: "test" })).error;
+  assert.equal(missing.statusCode, 409);
+  assert.equal(missing.code, "INDEX_REBUILD_REQUIRED");
+  assert.doesNotMatch(missing.message, /private/);
+  assert.equal(job.chat.length, 0);
   post.mock.mockImplementation(async () => ({ data: { answer: "Valid answer" } }));
   assert.equal((await invoke(askQuestion, { question: " test " })).response.answer, "Valid answer");
   assert.deepEqual(job.chat, [{ question: "test", answer: "Valid answer" }]);

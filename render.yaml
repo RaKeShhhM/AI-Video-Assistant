@@ -6,7 +6,13 @@ services:
     dockerfilePath: ./ai-service/Dockerfile
     dockerContext: ./ai-service
     plan: standard          # Whisper needs real CPU/RAM — do not use the free tier
+    disk:
+      name: vector-indexes
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
+      - key: VECTOR_DB_DIR
+        value: /var/data/vector_db
       - key: MISTRAL_API_KEY
         sync: false
       - key: SARVAM_API_KEY

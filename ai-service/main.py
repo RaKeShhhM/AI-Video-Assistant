@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from utils.internal_security import load_internal_settings, secret_matches
 from utils.job_ids import validate_job_id
+from utils.index_errors import IndexRebuildRequired, INDEX_REBUILD_MESSAGE
 
 load_dotenv()
 # Validate before importing models or creating storage directories.
@@ -153,6 +154,8 @@ def ask(payload: AskRequest):
         if not isinstance(answer, str) or not answer.strip() or len(answer) > 50000:
             raise ValueError("Invalid provider answer")
         return {"answer": answer}
+    except IndexRebuildRequired:
+        return JSONResponse(status_code=409, content={"code": "INDEX_REBUILD_REQUIRED", "detail": INDEX_REBUILD_MESSAGE})
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail="AI chat is temporarily unavailable. Please try again.") from exc
     finally:

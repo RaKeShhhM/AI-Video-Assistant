@@ -95,6 +95,9 @@ export const askQuestion = asyncHandler(async (req, res) => {
   try {
     answer = await askAiService(job._id.toString(), question.trim());
   } catch (err) {
+    if (err.response?.status === 409 && err.response.data?.code === "INDEX_REBUILD_REQUIRED") {
+      throw new ApiError(409, "This video's search index is unavailable. Submit the video again to rebuild it.", "INDEX_REBUILD_REQUIRED");
+    }
     if (err.response?.status === 429) throw new ApiError(429, "AI chat capacity is full. Try again later.");
     if (err instanceof ApiError) throw err;
     throw new ApiError(502, "AI chat is temporarily unavailable. Please try again.");
