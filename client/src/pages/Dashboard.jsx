@@ -7,6 +7,7 @@ import UploadForm from "../components/UploadForm";
 export default function Dashboard() {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [nextCursor, setNextCursor] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const requestNumber = useRef(0);
@@ -14,23 +15,32 @@ export default function Dashboard() {
   useEffect(() => {
     let mounted = true;
 
-    const load = () => {
+    const load = async () => {
       const request = ++requestNumber.current;
-      return api.get("/videos?limit=20").then(({ data }) => {
-      if (mounted) {
-        setJobs((previous) => {
-          const incoming = new Map(data.jobs.map(job => [job._id, job]));
-          return data.jobs.map(job => {
-            const current = previous.find(item => item._id === job._id);
-            return current && (current.progressVersion || 0) >= (job.progressVersion || 0)
-              ? { ...job, ...current } : job;
-          }).concat(previous.filter(job => !incoming.has(job._id) && request !== requestNumber.current));
-        });
-        if (request === requestNumber.current) setNextCursor(data.nextCursor);
-        setLoading(false);
+      setLoading(true);
+      setError(null);
+      try {
+        const { data } = await api.get("/videos?limit=20");
+        if (mounted && request === requestNumber.current) {
+          setJobs((previous) => {
+            const incoming = new Map(data.jobs.map(job => [job._id, job]));
+            return data.jobs.map(job => {
+              const current = previous.find(item => item._id === job._id);
+              return current && (current.progressVersion || 0) >= (job.progressVersion || 0)
+                ? { ...job, ...current } : job;
+            }).concat(previous.filter(job => !incoming.has(job._id) && request !== requestNumber.current));
+          });
+          setNextCursor(data.nextCursor);
+          setLoading(false);
+        }
+      } catch (err) {
+        if (mounted && request === requestNumber.current) {
+          setError(err.response?.data?.message || "Failed to load your videos. Please try again.");
+          setLoading(false);
+        }
       }
-      });
     };
+
     load();
     const refresh = setInterval(load, 10000);
 
@@ -63,6 +73,8 @@ export default function Dashboard() {
       const { data } = await api.get(`/videos?limit=20&cursor=${encodeURIComponent(nextCursor)}`);
       setJobs((prev) => [...prev, ...data.jobs.filter(job => !prev.some(existing => existing._id === job._id))]);
       setNextCursor(data.nextCursor);
+    } catch (err) {
+      alert(err.response?.data?.message || "Failed to load more videos.");
     } finally {
       setLoadingMore(false);
     }
@@ -74,7 +86,15 @@ export default function Dashboard() {
         <div>
           <h2 style={{ fontSize: 22, marginBottom: 18 }}>Your videos</h2>
           {loading && <p className="dim">Loading...</p>}
-          {!loading && jobs.length === 0 && (
+          {error && (
+            <div role="alert" className="card" style={{ marginBottom: 16, borderColor: "var(--error-color)", borderStyle: "solid", borderWidth: "1px" }}>
+              <p style={{ color: "var(--error-color)", marginBottom: 12 }}>{error}</p>
+              <button className="btn" onClick={() => { setLoading(true); setError(null); api.get("/videos?limit=20").then(({data}) => { setJobs(data.jobs); setNextCursor(data.nextCursor); setLoading(false); }).catch(() => setLoading(false)); }}>
+                Retry
+              </button>
+            </div>
+          )}
+          {!loading && !error && jobs.length === 0 && (
             <div className="card">
               <p className="dim">
                 Nothing here yet. Drop in a YouTube link or upload a file to get a transcript,
@@ -82,7 +102,7 @@ export default function Dashboard() {
               </p>
             </div>
           )}
-          {jobs.map((job) => (
+          {!loading && jobs.map((job) => (
             <JobCard key={job._id} job={job} />
           ))}
           {nextCursor && <button className="btn" disabled={loadingMore} onClick={loadMore}>
@@ -98,3 +118,4 @@ export default function Dashboard() {
     </div>
   );
 }
+

@@ -6,14 +6,18 @@ import Dashboard from "./pages/Dashboard";
 import JobDetail from "./pages/JobDetail";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import NotFound from "./pages/NotFound";
+import JobNotFound from "./pages/JobNotFound";
+import ErrorBoundary from "./components/error/ErrorBoundary";
+import AuthSkeleton from "./components/AuthSkeleton";
 
 export default function App() {
   const { user, loading } = useAuth();
 
-  if (loading) return null;
+  if (loading) return <AuthSkeleton />;
 
   return (
-    <>
+    <ErrorBoundary>
       <NavBar />
       <Routes>
         <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
@@ -34,7 +38,9 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="/jobs/not-found" element={<JobNotFound />} />
+        <Route path="*" element={<NotFound />} />
       </Routes>
-    </>
+    </ErrorBoundary>
   );
 }

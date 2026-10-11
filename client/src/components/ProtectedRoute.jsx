@@ -5,7 +5,10 @@ export default function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
 
   if (loading) return null;
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) {
+    const from = window.location.pathname;
+    return <Navigate to={`/login?redirectTo=${encodeURIComponent(from)}`} replace />;
+  }
 
   return children;
 }

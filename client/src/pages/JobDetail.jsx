@@ -20,6 +20,11 @@ export default function JobDetail() {
   const retryKey = useRef(null);
   const [actionError, setActionError] = useState("");
   const [acting, setActing] = useState(false);
+  const [job, setJob] = useState(null);
+  const [tab, setTab] = useState("summary");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
   async function remove() {
     if (acting) return;
     if (job.status !== "deleting" && !window.confirm("Delete this video, transcript, chat and search index? This cannot be undone.")) return;
@@ -33,6 +38,7 @@ export default function JobDetail() {
       setActionError(error.response?.data?.message || "Deletion could not be scheduled. Try again.");
     } finally { setActing(false); }
   }
+
   async function act(action) {
     if (acting) return;
     setActing(true);
@@ -48,17 +54,38 @@ export default function JobDetail() {
       setActionError(error.response?.data?.message || "Request interrupted. Try again.");
     } finally { setActing(false); }
   }
-  const [job, setJob] = useState(null);
-  const [tab, setTab] = useState("summary");
 
   useEffect(() => {
     let mounted = true;
+    setLoading(true);
+    setError(null);
     setJob(null);
-    api.get(`/videos/${id}`).then(({ data }) => mounted && setJob(prev => !prev || (data.job.progressVersion || 0) >= (prev.progressVersion || 0) ? data.job : prev)).catch(() => mounted && navigate("/"));
+
+    const load = async () => {
+      try {
+        const { data } = await api.get(`/videos/${id}`);
+        if (mounted) {
+          setJob(prev => !prev || (data.job.progressVersion || 0) >= (prev.progressVersion || 0) ? data.job : prev);
+          setLoading(false);
+        }
+      } catch (err) {
+        if (mounted) {
+          if (err.response?.status === 404) {
+            navigate("/jobs/not-found", { replace: true });
+          } else {
+            setError(err.response?.data?.message || "Failed to load video details. Please try again.");
+            setLoading(false);
+          }
+        }
+      }
+    };
+
+    load();
+
     const refresh = setInterval(() => {
       api.get(`/videos/${id}`).then(({ data }) => {
         if (mounted && data.job.status === "deleting") setJob(data.job);
-      }).catch(error => { if (mounted && error.response?.status === 404) navigate("/"); });
+      }).catch(error => { if (mounted && error.response?.status === 404) navigate("/jobs/not-found", { replace: true }); });
     }, 5000);
 
     const socket = getSocket();
@@ -79,12 +106,33 @@ export default function JobDetail() {
       clearInterval(refresh);
       socket?.off("job:update", onUpdate);
     };
-  }, [id]);
+  }, [id, navigate]);
+
+  if (loading) {
+    return (
+      <div className="container" style={{ paddingTop: 60 }}>
+        <p className="dim">Loading video details...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="container" style={{ paddingTop: 60 }}>
+        <div role="alert" className="card" style={{ borderColor: "var(--error-color)", borderStyle: "solid", borderWidth: "1px" }}>
+          <p style={{ color: "var(--error-color)", marginBottom: 12 }}>{error}</p>
+          <button className="btn" onClick={() => window.location.reload()}>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!job) {
     return (
       <div className="container" style={{ paddingTop: 60 }}>
-        <p className="dim">Loading...</p>
+        <p className="dim">No video data available.</p>
       </div>
     );
   }

@@ -17,9 +17,13 @@ export function AuthProvider({ children }) {
         setUser(data.user);
         setToken(data.token);
         connectSocket(data.token);
-      } catch {
-        sessionStorage.removeItem("token");
-        setToken(null);
+      } catch (error) {
+        if (error.response?.status === 401) {
+          sessionStorage.removeItem("token");
+          setToken(null);
+        } else {
+          console.error("Auth bootstrap encountered a temporary error:", error.message);
+        }
       } finally {
         setLoading(false);
       }
