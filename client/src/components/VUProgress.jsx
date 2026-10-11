@@ -20,8 +20,8 @@ export default function VUProgress({ status, stage, percent, segments = 20 }) {
   const litCount = Math.round((percent / 100) * segments);
 
   return (
-    <div>
-      <div className={`vu-meter ${status}`}>
+    <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+      <div className={`vu-meter ${status}`} style={{ width: 120, flexShrink: 0 }}>
         {Array.from({ length: segments }).map((_, i) => (
           <div key={i} className={`bar ${i < litCount ? "lit" : ""}`} style={{ height: `${40 + (i % 5) * 10}%` }} />
         ))}
@@ -30,8 +30,9 @@ export default function VUProgress({ status, stage, percent, segments = 20 }) {
         style={{
           display: "flex",
           justifyContent: "space-between",
-          marginTop: 8,
           fontSize: 13,
+          flex: 1,
+          gap: 8
         }}
       >
         <span className="dim">{STAGE_LABELS[stage] || stage}</span>
