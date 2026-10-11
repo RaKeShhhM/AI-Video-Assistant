@@ -163,8 +163,8 @@ export default function JobDetail() {
 
   return (
     <div className="container" style={{ paddingTop: 40, paddingBottom: 80 }}>
-      <h2 style={{ fontSize: 24, marginBottom: 4 }}>{job.title || "Deleting video"}</h2>
-      <p className="dim mono" style={{ fontSize: 12, marginBottom: 28 }}>
+      <h2 style={{ fontSize: 24, marginBottom: 4, overflowWrap: "anywhere" }}>{job.title || "Deleting video"}</h2>
+      <p className="dim mono" style={{ fontSize: 12, marginBottom: 28, overflowWrap: "anywhere" }}>
         {job.sourceType === "youtube" ? job.sourceValue : "Uploaded file"} · {job.language}
       </p>
 
@@ -206,6 +206,7 @@ export default function JobDetail() {
             <pre
               style={{
                 whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
                 fontFamily: tab === "transcript" ? "var(--font-mono)" : "var(--font-body)",
                 fontSize: 14,
                 lineHeight: 1.6,

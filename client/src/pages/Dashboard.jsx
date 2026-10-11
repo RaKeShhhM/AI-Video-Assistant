@@ -96,8 +96,12 @@ export default function Dashboard() {
 
   return (
     <div className="container" style={{ paddingTop: 40, paddingBottom: 80 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 32 }}>
-        <div>
+      <div style={{ 
+        display: "grid", 
+        gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", 
+        gap: 32 
+      }}>
+        <div style={{ maxWidth: "1fr" }}>
           <h2 style={{ fontSize: 22, marginBottom: 18 }}>Your videos</h2>
           {loading && <p className="dim">Loading...</p>}
           {error && (
@@ -124,7 +128,7 @@ export default function Dashboard() {
           </button>}
         </div>
 
-        <div>
+        <div style={{ maxWidth: 380 }}>
           <h2 style={{ fontSize: 22, marginBottom: 18 }}>New video</h2>
           <UploadForm />
         </div>
