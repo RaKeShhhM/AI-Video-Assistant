@@ -4,6 +4,7 @@ import FormData from "form-data";
 import { validateInternalSecret } from "../config/internalSecurity.js";
 import { createReadStream } from "node:fs";
 import { limits } from "../config/resourceLimits.js";
+import { normalizeYouTubeUrl } from "../utils/videoSource.js";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
 
@@ -14,6 +15,9 @@ const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
  * progress to its configured Express callback origin.
  */
 export async function forwardProcessJob({ jobId, language, youtubeUrl, file }) {
+  if (Boolean(youtubeUrl) === Boolean(file)) {
+    throw new Error("Exactly one processing source is required.");
+  }
   const form = new FormData();
   form.append("job_id", jobId);
   form.append("language", language);
@@ -21,8 +25,8 @@ export async function forwardProcessJob({ jobId, language, youtubeUrl, file }) {
 
   let stream;
   if (youtubeUrl) {
-    form.append("youtube_url", youtubeUrl);
-  } else if (file) {
+    form.append("youtube_url", normalizeYouTubeUrl(youtubeUrl));
+  } else {
     stream = createReadStream(file.path);
     form.append("file", stream, { filename: file.originalname, knownLength: file.size, contentType: file.mimetype });
   }

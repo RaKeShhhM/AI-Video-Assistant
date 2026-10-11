@@ -71,3 +71,30 @@ test("gateway sends header-only credentials and refuses HTTP redirects", async (
     else process.env.INTERNAL_AI_SECRET = previous;
   }
 });
+
+test("gateway revalidates the source and rejects ambiguous processing requests", async () => {
+  const previous = process.env.INTERNAL_AI_SECRET;
+  process.env.INTERNAL_AI_SECRET = SECRET;
+  try {
+    await assert.rejects(
+      forwardProcessJob({
+        jobId: "6ab43b980163a134e354a9d9",
+        language: "english",
+        youtubeUrl: "https://example.com/video.mp4",
+      }),
+      { statusCode: 400 },
+    );
+    await assert.rejects(
+      forwardProcessJob({
+        jobId: "6ab43b980163a134e354a9d9",
+        language: "english",
+        youtubeUrl: "https://www.youtube.com/watch?v=BaW_jenozKc",
+        file: { path: "source.wav", originalname: "source.wav", size: 1, mimetype: "audio/wav" },
+      }),
+      /Exactly one processing source/,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.INTERNAL_AI_SECRET;
+    else process.env.INTERNAL_AI_SECRET = previous;
+  }
+});
