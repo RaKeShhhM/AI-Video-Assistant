@@ -4,6 +4,7 @@ import api from "../lib/api";
 import { getSocket } from "../lib/socket";
 import VUProgress from "../components/VUProgress";
 import ChatPanel from "../components/ChatPanel";
+import ReactMarkdown from "react-markdown";
 
 const TABS = ["summary", "transcript", "action_items", "key_decisions", "open_questions"];
 const TAB_LABELS = {
@@ -13,6 +14,43 @@ const TAB_LABELS = {
   key_decisions: "Key decisions",
   open_questions: "Open questions",
 };
+
+function ContentBlock({ title, content, isMono = false }) {
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      alert("Copied to clipboard");
+    } catch (err) {
+      alert("Failed to copy");
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 24, position: "relative" }}>
+      <div style={{ 
+        position: "absolute", 
+        top: 12, 
+        right: 12, 
+        display: "flex", 
+        gap: 8 
+      }}>
+        <button className="btn" style={{ padding: "4px 8px", fontSize: 11 }} onClick={copy}>
+          Copy
+        </button>
+      </div>
+      <div style={{ 
+        paddingRight: 60,
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+        fontFamily: isMono ? "var(--font-mono)" : "var(--font-body)",
+        fontSize: 14,
+        lineHeight: 1.6,
+      }}>
+        {isMono ? content : <ReactMarkdown>{content}</ReactMarkdown>}
+      </div>
+    </div>
+  );
+}
 
 export default function JobDetail() {
   const { id } = useParams();
@@ -187,7 +225,7 @@ export default function JobDetail() {
         <div className="error-banner">{job.error || "This job failed to process."}</div>
       )}
 
-      {job.status === "completed" && (
+      {(job.status === "completed" || (isProcessing && tabContent[tab])) && (
         <>
           <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap" }}>
             {TABS.map((t) => (
@@ -202,20 +240,11 @@ export default function JobDetail() {
             ))}
           </div>
 
-          <div className="card" style={{ marginBottom: 24 }}>
-            <pre
-              style={{
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                fontFamily: tab === "transcript" ? "var(--font-mono)" : "var(--font-body)",
-                fontSize: 14,
-                lineHeight: 1.6,
-                margin: 0,
-              }}
-            >
-              {tabContent[tab] || "Nothing here."}
-            </pre>
-          </div>
+          <ContentBlock 
+            title={TAB_LABELS[tab]} 
+            content={tabContent[tab]} 
+            isMono={tab === "transcript"} 
+          />
 
           <ChatPanel jobId={job._id} initialChat={job.chat || []} />
         </>

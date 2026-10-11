@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../lib/api";
+import ReactMarkdown from "react-markdown";
 
 export default function ChatPanel({ jobId, initialChat = [], onAnswered }) {
   const [chat, setChat] = useState(initialChat);
@@ -86,9 +87,9 @@ export default function ChatPanel({ jobId, initialChat = [], onAnswered }) {
         {chat.map((c) => (
           <div key={c.messageId || c._id}>
             <p style={{ fontSize: 14, fontWeight: 600 }}>You: {c.question}</p>
-            <p className="dim" style={{ fontSize: 14, marginTop: 4 }}>
-              {c.answer}
-            </p>
+            <div className="dim" style={{ fontSize: 14, marginTop: 4 }}>
+              <ReactMarkdown>{c.answer}</ReactMarkdown>
+            </div>
           </div>
         ))}
       </div>
