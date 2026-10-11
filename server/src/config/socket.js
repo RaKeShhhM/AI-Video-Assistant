@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
+import User from "../models/User.js";
 
 let io;
 
@@ -10,11 +11,14 @@ export function initSocket(httpServer) {
     cors: { origin: origins, credentials: true },
   });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth?.token;//taking the token from the handshake auth object
       if (!token) return next(new Error("No auth token provided"));
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      if (typeof decoded.id !== "string" || !await User.exists({ _id: decoded.id })) {
+        return next(new Error("Account is unavailable"));
+      }
       socket.userId = decoded.id;
       next();
     } catch (err) {

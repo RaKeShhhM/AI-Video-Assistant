@@ -6,21 +6,19 @@ const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(() => localStorage.getItem("token"));
+  const [token, setToken] = useState(() => sessionStorage.getItem("token"));
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function bootstrap() {
-      if (!token) {
-        setLoading(false);
-        return;
-      }
       try {
-        const { data } = await api.get("/auth/me");
+        const { data } = await api.post("/auth/refresh");
+        sessionStorage.setItem("token", data.token);
         setUser(data.user);
-        connectSocket(token);
+        setToken(data.token);
+        connectSocket(data.token);
       } catch {
-        localStorage.removeItem("token");
+        sessionStorage.removeItem("token");
         setToken(null);
       } finally {
         setLoading(false);
@@ -31,7 +29,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   function applyAuth(newToken, newUser) {
-    localStorage.setItem("token", newToken);
+    sessionStorage.setItem("token", newToken);
     setToken(newToken);
     setUser(newUser);
     connectSocket(newToken);
@@ -48,11 +46,28 @@ export function AuthProvider({ children }) {
   }
 
   function logout() {
-    localStorage.removeItem("token");
+    api.post("/auth/logout").catch(() => {});
+    sessionStorage.removeItem("token");
     setToken(null);
     setUser(null);
     disconnectSocket();
   }
+
+  useEffect(() => {
+    const refresh = (event) => {
+      setToken(event.detail.token);
+      setUser(event.detail.user);
+      connectSocket(event.detail.token);
+    };
+    const expired = () => logout();
+    window.addEventListener("auth:refreshed", refresh);
+    window.addEventListener("auth:expired", expired);
+    return () => {
+      window.removeEventListener("auth:refreshed", refresh);
+      window.removeEventListener("auth:expired", expired);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <AuthContext.Provider value={{ user, token, loading, login, register, logout }}>

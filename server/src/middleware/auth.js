@@ -1,8 +1,9 @@
 import jwt from "jsonwebtoken";
 import { ApiError } from "../utils/ApiError.js";
 import { internalSecretMatches, validateInternalSecret } from "../config/internalSecurity.js";
+import User from "../models/User.js";
 
-export function requireAuth(req, res, next) {
+export async function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
 
@@ -13,6 +14,7 @@ export function requireAuth(req, res, next) {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     if (typeof decoded.id !== "string" || !/^[a-fA-F0-9]{24}$/.test(decoded.id)) throw new Error("Invalid subject");
+    if (!await User.exists({ _id: decoded.id })) throw new Error("Account is unavailable");
     req.userId = decoded.id;
     next();
   } catch (err) {
