@@ -100,6 +100,7 @@ def cleanup_one(db, jobs, download_dir, upload_dir, *, now=None,
         vector_delete(str(job["_id"]))
         cleanup_scratch(str(job["_id"]), download_dir, upload_dir)
         media_delete(db, jobs, job)
+        db["chatmessages"].delete_many({"job": job["_id"]})
         # Keep only an opaque tombstone so replaying a deleted submission key
         # cannot recreate its job. All user content and artifacts are erased.
         jobs.update_one(owner, {"$set": {"status": "deleted", "deletion.state": "done",

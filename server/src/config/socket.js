@@ -40,5 +40,12 @@ export function getIO() {
 
 export function emitJobUpdate(userId, job) {
   if (!io) return;
-  io.to(`user:${userId}`).emit("job:update", job);
+  const source = job?.toJSON ? job.toJSON() : job;
+  const compact = {};
+  for (const field of ["_id", "status", "stage", "percent", "title", "sourceType",
+    "language", "error", "durationSeconds", "progressVersion", "retention", "deletion",
+    "createdAt", "updatedAt"]) {
+    if (source?.[field] !== undefined) compact[field] = source[field];
+  }
+  io.to(`user:${userId}`).emit("job:update", { version: 1, job: compact });
 }

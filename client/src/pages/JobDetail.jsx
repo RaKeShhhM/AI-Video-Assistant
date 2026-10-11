@@ -63,8 +63,13 @@ export default function JobDetail() {
 
     const socket = getSocket();
     function onUpdate(updated) {
-      if (updated._id === id) {
-        setJob((prev) => !prev || (updated.progressVersion || 0) >= (prev.progressVersion || 0) ? { ...prev, ...updated } : prev);
+      const event = updated?.version === 1 ? updated.job : updated;
+      if (event?._id === id) {
+        setJob((prev) => !prev || (event.progressVersion || 0) >= (prev.progressVersion || 0) ? { ...prev, ...event } : prev);
+        if (event.status === "completed") {
+          api.get(`/videos/${id}`).then(({ data }) => mounted && setJob(prev =>
+            !prev || (data.job.progressVersion || 0) >= (prev.progressVersion || 0) ? data.job : prev));
+        }
       }
     }
     socket?.on("job:update", onUpdate);

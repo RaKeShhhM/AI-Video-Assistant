@@ -8,10 +8,11 @@ import net from "node:net";
 import { once } from "node:events";
 import mongoose from "mongoose";
 import Job from "../src/models/Job.js";
+import ChatMessage from "../src/models/ChatMessage.js";
 import ResourceUsage from "../src/models/ResourceUsage.js";
 import { usage } from "../src/services/usageService.js";
 import { submissionKey, submitJob } from "../src/services/jobSubmission.js";
-import { cancelJob, deleteJob, getJob, retryJob, receiveProgress } from "../src/controllers/videoController.js";
+import { cancelJob, deleteJob, getJob, retryJob, receiveProgress, listJobs, listChat } from "../src/controllers/videoController.js";
 
 const source = { type: "youtube", youtubeUrl: "https://www.youtube.com/watch?v=BaW_jenozKc", language: "english" };
 async function invoke(handler, req) {
@@ -49,6 +50,37 @@ test("durable submissions and lifecycle fences", { skip: !process.env.S3_MONGOD 
     }
     await mongoose.connect(uri, { dbName: database });
     await Promise.all([Job.init(), ResourceUsage.init()]);
+    await ChatMessage.init();
+    await t.test("R6 paginates jobs and chat with ownership and timestamp tie-breakers", async () => {
+      const user = new mongoose.Types.ObjectId();
+      const other = new mongoose.Types.ObjectId();
+      const timestamp = new Date("2026-01-01T00:00:00.000Z");
+      const jobs = await Job.create(Array.from({ length: 3 }, (_, index) => ({
+        user, sourceType: "youtube", sourceValue: `https://example.com/${index}`,
+        title: `Job ${index}`, status: "completed", createdAt: timestamp, updatedAt: timestamp,
+      })));
+      await Job.create({ user: other, sourceType: "youtube", sourceValue: "https://example.com/other", status: "completed" });
+      await ChatMessage.create(jobs.map((job, index) => ({
+        messageId: `r6-message-${index}`, job: jobs[0]._id, user,
+        sequence: index + 1, question: `Question ${index}`, answer: `Answer ${index}`,
+        createdAt: timestamp, updatedAt: timestamp,
+      })));
+      const first = await invoke(listJobs, { userId: user, query: { limit: "2" } });
+      assert.equal(first.jobs.length, 2);
+      assert.ok(first.nextCursor);
+      assert.equal("transcript" in first.jobs[0], false);
+      assert.equal("chat" in first.jobs[0], false);
+      assert.equal("user" in first.jobs[0], false);
+      const second = await invoke(listJobs, { userId: user, query: { limit: "2", cursor: first.nextCursor } });
+      assert.equal(second.jobs.length, 1);
+      assert.notEqual(String(first.jobs[0]._id), String(first.jobs[1]._id));
+      const chatFirst = await invoke(listChat, { userId: user, params: { id: String(jobs[0]._id) }, query: { limit: "2" } });
+      assert.deepEqual(chatFirst.messages.map(message => message.sequence), [2, 3]);
+      const chatSecond = await invoke(listChat, { userId: user, params: { id: String(jobs[0]._id) }, query: { limit: "2", cursor: chatFirst.nextCursor } });
+      assert.deepEqual(chatSecond.messages.map(message => message.sequence), [1]);
+      assert.equal((await Job.findById(jobs[0]._id)).chat.length, 0);
+      await assert.rejects(invoke(listChat, { userId: other, params: { id: String(jobs[0]._id) }, query: {} }), { statusCode: 404 });
+    });
     await t.test("concurrent replays create one runnable job and one reservation", async () => {
       const user = new mongoose.Types.ObjectId();
       const results = await Promise.allSettled(Array.from({ length: 12 }, () => submitJob(user, "concurrent-key-1234", source)));

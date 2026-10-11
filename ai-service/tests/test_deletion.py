@@ -93,6 +93,10 @@ class DeletionTests(unittest.TestCase):
         incoming.write_bytes(b"private source")
         outside = self.downloads / "unrelated.txt"
         outside.write_text("keep")
+        self.db["chatmessages"].insert_one({
+            "messageId": "r6-delete-message", "job": self.id, "user": ObjectId(),
+            "sequence": 1, "question": "private", "answer": "private",
+        })
         vector = Mock()
         self.assertTrue(self._run(vector_delete=vector))
         self.assertEqual(vector.call_args.args[0], str(self.id))
@@ -106,6 +110,7 @@ class DeletionTests(unittest.TestCase):
             self.assertNotIn(key, saved)
         self.assertFalse(self._run(vector_delete=vector))
         self.assertEqual(vector.call_count, 1)
+        self.assertIsNone(self.db["chatmessages"].find_one({"job": self.id}))
 
     def test_failure_is_visible_and_retries_without_recreating_results(self):
         fail = Mock(side_effect=PermissionError("locked"))

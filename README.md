@@ -40,10 +40,18 @@ external inference service.
    (`/api/internal/jobs/progress`, protected by a shared secret).
 5. Express updates the `Job` document and emits a `job:update` Socket.io
    event to that user's private room.
-6. The client updates the dashboard and job detail page live — no polling.
-7. Once `status: completed`, the client can chat with the video via
-   `POST /api/videos/:id/ask`, which Express proxies to FastAPI's `/ask`
-   endpoint (loads that job's persisted Chroma collection).
+6. The client updates compact, versioned dashboard/detail state through Socket.io
+   and refetches the authoritative result document when a job completes.
+7. History uses cursor pagination (`GET /api/videos?limit=20&cursor=...`) and
+   card projections; large transcript/result fields are fetched only for the
+   selected job.
+8. Once `status: completed`, chat messages are stored in the separate
+   `ChatMessage` collection. `GET /api/videos/:id/chat` returns bounded pages,
+   while `POST /api/videos/:id/ask` returns only the new message rather than
+   the full conversation.
+   Existing embedded chat entries are migrated lazily into `ChatMessage` on
+   the first chat read or write; the migration is idempotent and does not
+   expose another user's messages.
 
 ## Project structure
 
@@ -175,7 +183,6 @@ locally.
   request/response
 - Swap local Whisper for a hosted STT API in production for speed and lower
   memory footprint
-- Add pagination to the job list once history grows
 
 
 

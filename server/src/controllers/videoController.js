@@ -1,4 +1,5 @@
 import Job from "../models/Job.js";
+import ChatMessage from "../models/ChatMessage.js";
 import { emitJobUpdate } from "../config/socket.js";
 import { askAiService } from "../services/aiService.js";
 import { ApiError } from "../utils/ApiError.js";
@@ -8,6 +9,8 @@ import { randomBytes } from "node:crypto";
 import { usage } from "../services/usageService.js";
 import { cleanupUpload } from "../middleware/upload.js";
 import { submissionKey, submitJob } from "../services/jobSubmission.js";
+import { decodeCursor, encodeCursor, olderThan, pageLimit } from "../utils/pagination.js";
+import { randomUUID } from "node:crypto";
 
 export const createJob = asyncHandler(async (req, res) => {
   req.uploadOwnedByController = true;
@@ -24,16 +27,65 @@ export const createJob = asyncHandler(async (req, res) => {
 });
 
 export const listJobs = asyncHandler(async (req, res) => {
-  const jobs = await Job.find({ user: req.userId, status: { $ne: "deleted" } })
-    .sort({ createdAt: -1 })
-    .select("-transcript -chat");
-  res.json({ jobs });
+  const limit = pageLimit(req.query.limit);
+  const cursor = decodeCursor(req.query.cursor);
+  const filter = { user: req.userId, status: { $ne: "deleted" }, ...olderThan(cursor) };
+  const jobs = await Job.find(filter)
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(limit + 1)
+    .select("_id title sourceType language status stage percent retention deletion progressVersion createdAt updatedAt");
+  const hasMore = jobs.length > limit;
+  const page = hasMore ? jobs.slice(0, limit) : jobs;
+  const last = page[page.length - 1];
+  res.json({
+    jobs: page,
+    nextCursor: hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last._id }) : null,
+  });
 });
 
 export const getJob = asyncHandler(async (req, res) => {
-  const job = await Job.findOne({ _id: jobId(req.params.id), user: req.userId });
+  const job = await Job.findOne({ _id: jobId(req.params.id), user: req.userId }).select("-chat -chatSequence");
   if (!job || job.status === "deleted") throw new ApiError(404, "Job not found");
   res.json({ job });
+});
+
+async function migrateLegacyChat(job) {
+  if (!job.chat?.length) return;
+  await ChatMessage.bulkWrite(job.chat.map((message, index) => ({
+    updateOne: {
+      filter: { messageId: `legacy:${job._id}:${index}` },
+      update: { $setOnInsert: {
+        messageId: `legacy:${job._id}:${index}`, job: job._id, user: job.user,
+        sequence: index - job.chat.length, question: message.question, answer: message.answer,
+        createdAt: message.createdAt, updatedAt: message.updatedAt,
+      } },
+      upsert: true,
+    },
+  })));
+  await Job.updateOne(
+    { _id: job._id, user: job.user, chat: { $exists: true, $ne: [] } },
+    { $max: { chatSequence: 0 }, $unset: { chat: "" } },
+  );
+}
+
+export const listChat = asyncHandler(async (req, res) => {
+  const limit = pageLimit(req.query.limit, 20, 50);
+  const cursor = decodeCursor(req.query.cursor);
+  const job = await Job.findOne({ _id: jobId(req.params.id), user: req.userId }).select("user status chat");
+  if (!job || job.status === "deleted") throw new ApiError(404, "Job not found");
+  await migrateLegacyChat(job);
+  const messageCursor = cursor?.sequence !== undefined
+    ? { $or: [{ sequence: { $lt: cursor.sequence } }, { sequence: cursor.sequence, _id: { $lt: cursor.id } }] }
+    : olderThan(cursor);
+  const filter = { job: job._id, user: req.userId, ...messageCursor };
+  const messages = await ChatMessage.find(filter).sort({ sequence: -1, _id: -1 }).limit(limit + 1).select("-job -user");
+  const hasMore = messages.length > limit;
+  const page = (hasMore ? messages.slice(0, limit) : messages).reverse();
+  const oldest = page[0];
+  res.json({
+    messages: page,
+    nextCursor: hasMore && oldest ? encodeCursor({ createdAt: oldest.createdAt, id: oldest._id, sequence: oldest.sequence }) : null,
+  });
 });
 
 export const deleteJob = asyncHandler(async (req, res) => {
@@ -117,6 +169,7 @@ export const askQuestion = asyncHandler(async (req, res) => {
   if (job.status !== "completed") {
     throw new ApiError(400, "This video is still processing — chat unlocks once it's done");
   }
+  await migrateLegacyChat(job);
 
   await usage.reserveQuestion(req.userId);
   let answer;
@@ -131,10 +184,21 @@ export const askQuestion = asyncHandler(async (req, res) => {
     throw new ApiError(502, "AI chat is temporarily unavailable. Please try again.");
   }
 
-  const saved = await Job.findOneAndUpdate({ _id: job._id, user: req.userId, status: "completed" },
-    { $push: { chat: { question: question.trim(), answer } } }, { new: true });
-  if (!saved) throw new ApiError(409, "This job was deleted while the answer was being prepared.", "JOB_DELETING");
-  res.json({ answer, chat: saved.chat });
+  const counter = await Job.findOneAndUpdate(
+    { _id: job._id, user: req.userId, status: "completed" },
+    { $inc: { chatSequence: 1 } },
+    { new: true, select: "chatSequence" }
+  );
+  if (!counter) throw new ApiError(409, "This job was deleted while the answer was being prepared.", "JOB_DELETING");
+  const message = await ChatMessage.create({
+    messageId: randomUUID(),
+    job: job._id,
+    user: req.userId,
+    sequence: counter.chatSequence,
+    question: question.trim(),
+    answer,
+  });
+  res.json({ answer, message });
 });
 
 // The worker atomically persists the result and pending notification in MongoDB.

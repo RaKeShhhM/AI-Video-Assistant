@@ -10,6 +10,7 @@ import {
   deleteJob,
   getJob,
   listJobs,
+  listChat,
 } from "../controllers/videoController.js";
 import { retentionDays } from "../services/jobSubmission.js";
 import { requireAuth } from "../middleware/auth.js";
@@ -23,6 +24,7 @@ router.get("/limits", (req, res) => res.json({ maxUploadBytes: limits.uploadByte
 router.post("/", rateLimit({ max: 10, windowMs: 3600000 }), uploadMedia, createJob);
 router.get("/", listJobs);
 router.get("/:id", getJob);
+router.get("/:id/chat", listChat);
 router.delete("/:id", deleteJob);
 router.post("/:id/cancel", cancelJob);
 router.post("/:id/retry", rateLimit({ max: 10, windowMs: 3600000 }), retryJob);

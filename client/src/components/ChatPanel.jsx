@@ -1,11 +1,43 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import api from "../lib/api";
 
 export default function ChatPanel({ jobId, initialChat = [], onAnswered }) {
   const [chat, setChat] = useState(initialChat);
+  const [nextCursor, setNextCursor] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [question, setQuestion] = useState("");
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    setChat([]);
+    setNextCursor(null);
+    setLoading(true);
+    api.get(`/videos/${jobId}/chat?limit=20`).then(({ data }) => {
+      if (mounted) {
+        setChat(data.messages);
+        setNextCursor(data.nextCursor);
+      }
+    }).catch((err) => mounted && setError(err.response?.data?.message || "Could not load chat history."))
+      .finally(() => mounted && setLoading(false));
+    return () => { mounted = false; };
+  }, [jobId]);
+
+  async function loadOlder() {
+    if (!nextCursor || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const { data } = await api.get(`/videos/${jobId}/chat?limit=20&cursor=${encodeURIComponent(nextCursor)}`);
+      setChat((prev) => [...data.messages, ...prev]);
+      setNextCursor(data.nextCursor);
+    } catch (err) {
+      setError(err.response?.data?.message || "Could not load older chat messages.");
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
 
   async function handleAsk(e) {
     e.preventDefault();
@@ -17,8 +49,8 @@ export default function ChatPanel({ jobId, initialChat = [], onAnswered }) {
 
     try {
       const { data } = await api.post(`/videos/${jobId}/ask`, { question: q });
-      setChat(data.chat);
-      onAnswered?.(data.chat);
+      setChat((prev) => [...prev, data.message]);
+      onAnswered?.(data.message);
     } catch (err) {
       setError(err.response?.data?.message || "Could not get an answer. Try again.");
       setQuestion(q);
@@ -32,13 +64,17 @@ export default function ChatPanel({ jobId, initialChat = [], onAnswered }) {
       <h3 style={{ fontSize: 16, marginBottom: 14 }}>Chat with this video</h3>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 16 }}>
-        {chat.length === 0 && (
+        {nextCursor && <button className="btn" disabled={loadingOlder} onClick={loadOlder}>
+          {loadingOlder ? "Loading..." : "Load older messages"}
+        </button>}
+        {loading && <p className="dim">Loading chat...</p>}
+        {!loading && chat.length === 0 && (
           <p className="dim" style={{ fontSize: 14 }}>
             Ask anything about the video — the answer is grounded only in its transcript.
           </p>
         )}
-        {chat.map((c, i) => (
-          <div key={i}>
+        {chat.map((c) => (
+          <div key={c.messageId || c._id}>
             <p style={{ fontSize: 14, fontWeight: 600 }}>You: {c.question}</p>
             <p className="dim" style={{ fontSize: 14, marginTop: 4 }}>
               {c.answer}

@@ -24,7 +24,7 @@ test("contracts reject malformed types, unknown fields and unsafe bounds", () =>
     assert.throws(() => sourceInput({ language: value }, {}));
   }
   assert.deepEqual(authInput({ name: " Sam ", email: " SAM@Example.com ", password: "123456" }, true), { name: "Sam", email: "sam@example.com", password: "123456" });
-  for (const password of ["12345", "x".repeat(73), "é".repeat(37)]) assert.throws(() => authInput({ name: "Sam", email: "sam@example.com", password }, true));
+  for (const password of ["12345", "x".repeat(73), "ï¿½".repeat(37)]) assert.throws(() => authInput({ name: "Sam", email: "sam@example.com", password }, true));
   assert.throws(() => authInput({ name: "x".repeat(101), email: "a@b.com", password: "123456" }, true));
   assert.throws(() => authInput({ email: "a@b", password: "123456" }));
   assert.throws(() => questionInput({ question: "x", extra: true }));
@@ -85,16 +85,15 @@ test("HTTP boundaries reject before database work and sanitize failures", async 
 });
 import axios from "axios";
 import { usage } from "../src/services/usageService.js";
+import ChatMessage from "../src/models/ChatMessage.js";
 
 test("provider failures never enter chat", async t => {
   t.mock.method(console, "error", () => {});
   const job = { _id: id, user: id, status: "processing", chat: [], save: async () => {} };
   t.mock.method(Job, "findById", async () => job);
   t.mock.method(Job, "findOne", async () => job);
-  t.mock.method(Job, "findOneAndUpdate", async (_filter, update) => {
-    job.chat.push(update.$push.chat);
-    return job;
-  });
+  t.mock.method(Job, "findOneAndUpdate", async () => ({ chatSequence: 1 }));
+  t.mock.method(ChatMessage, "create", async value => ({ ...value, _id: id }));
   t.mock.method(usage, "finishJob", async () => {});
   t.mock.method(usage, "reserveQuestion", async () => {});
   const invoke = async (handler, body) => {
@@ -119,6 +118,38 @@ test("provider failures never enter chat", async t => {
   assert.doesNotMatch(missing.message, /private/);
   assert.equal(job.chat.length, 0);
   post.mock.mockImplementation(async () => ({ data: { answer: "Valid answer" } }));
-  assert.equal((await invoke(askQuestion, { question: " test " })).response.answer, "Valid answer");
-  assert.deepEqual(job.chat, [{ question: "test", answer: "Valid answer" }]);
+  const answer = (await invoke(askQuestion, { question: " test " })).response;
+  assert.equal(answer.answer, "Valid answer");
+  assert.equal(answer.message.answer, "Valid answer");
+  assert.equal(answer.message.sequence, 1);
+});
+
+test("concurrent chat requests receive distinct ordered message IDs", async t => {
+  const job = { _id: id, user: id, status: "completed", indexAttempt: "attempt-1" };
+  let sequence = 0;
+  const saved = [];
+  t.mock.method(Job, "findOne", async () => job);
+  t.mock.method(Job, "findOneAndUpdate", async () => ({ chatSequence: ++sequence }));
+  t.mock.method(ChatMessage, "create", async value => {
+    saved.push(value);
+    return value;
+  });
+  t.mock.method(usage, "reserveQuestion", async () => {});
+  const previous = process.env.INTERNAL_AI_SECRET;
+  process.env.INTERNAL_AI_SECRET = "test-only-internal-secret-0123456789abcdef";
+  t.after(() => { if (previous === undefined) delete process.env.INTERNAL_AI_SECRET; else process.env.INTERNAL_AI_SECRET = previous; });
+  t.mock.method(axios, "post", async (_url, body) => ({ data: { answer: `Answer: ${body.question}` } }));
+
+  const invoke = (question) => new Promise((resolve, reject) => {
+    askQuestion(
+      { body: { question }, params: { id }, userId: id },
+      { json: resolve },
+      reject,
+    );
+  });
+  const results = await Promise.all([invoke("first"), invoke("second")]);
+
+  assert.deepEqual(saved.map(message => message.sequence).sort(), [1, 2]);
+  assert.equal(new Set(saved.map(message => message.messageId)).size, 2);
+  assert.deepEqual(results.map(result => result.message.sequence).sort(), [1, 2]);
 });

@@ -85,7 +85,9 @@ const jobSchema = new mongoose.Schema(
     keyDecisions: { type: String },
     openQuestions: { type: String },
 
+    // Kept for backwards-compatible reads of jobs created before R6.
     chat: { type: [chatMessageSchema], default: [] },
+    chatSequence: { type: Number, default: 0 },
   },
   {
     timestamps: true,
@@ -103,6 +105,7 @@ const jobSchema = new mongoose.Schema(
         }
         delete ret.delivery;
         delete ret.callbackAck;
+        delete ret.chatSequence;
         if (["deleting", "deleted"].includes(ret.status)) {
           for (const field of ["sourceValue", "title", "transcript", "summary", "actionItems",
             "keyDecisions", "openQuestions", "chat", "error", "language", "sourceType"])
@@ -117,5 +120,7 @@ const jobSchema = new mongoose.Schema(
     },
   }
 );
+
+jobSchema.index({ user: 1, createdAt: -1, _id: -1 });
 
 export default mongoose.model("Job", jobSchema);
