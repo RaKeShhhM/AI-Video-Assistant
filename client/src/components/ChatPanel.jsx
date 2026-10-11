@@ -25,6 +25,16 @@ export default function ChatPanel({ jobId, initialChat = [], onAnswered }) {
     return () => { mounted = false; };
   }, [jobId]);
 
+  useEffect(() => {
+    if (initialChat && initialChat.length > 0) {
+      setChat(prev => {
+        const currentIds = new Set(prev.map(m => m.messageId || m._id));
+        const newMessages = initialChat.filter(m => !currentIds.has(m.messageId || m._id));
+        return [...prev, ...newMessages];
+      });
+    }
+  }, [initialChat]);
+
   async function loadOlder() {
     if (!nextCursor || loadingOlder) return;
     setLoadingOlder(true);
