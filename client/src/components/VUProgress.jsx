@@ -20,7 +20,7 @@ export default function VUProgress({ status, stage, percent, segments = 20 }) {
   const litCount = Math.round((percent / 100) * segments);
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 16 }} role="progressbar" aria-valuenow={percent} aria-valuemin="0" aria-valuemax="100">
       <div className={`vu-meter ${status}`} style={{ width: 120, flexShrink: 0 }}>
         {Array.from({ length: segments }).map((_, i) => (
           <div key={i} className={`bar ${i < litCount ? "lit" : ""}`} style={{ height: `${40 + (i % 5) * 10}%` }} />
@@ -41,3 +41,4 @@ export default function VUProgress({ status, stage, percent, segments = 20 }) {
     </div>
   );
 }
+

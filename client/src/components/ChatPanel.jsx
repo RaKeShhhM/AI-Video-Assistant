@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import api from "../lib/api";
 import ReactMarkdown from "react-markdown";
 
@@ -10,6 +10,7 @@ export default function ChatPanel({ jobId, initialChat = [], onAnswered }) {
   const [question, setQuestion] = useState("");
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState("");
+  const textareaRef = useRef(null);
 
   useEffect(() => {
     let mounted = true;
@@ -35,6 +36,13 @@ export default function ChatPanel({ jobId, initialChat = [], onAnswered }) {
       });
     }
   }, [initialChat]);
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  }, [question]);
 
   async function loadOlder() {
     if (!nextCursor || loadingOlder) return;
@@ -71,10 +79,10 @@ export default function ChatPanel({ jobId, initialChat = [], onAnswered }) {
   }
 
   return (
-    <div className="card">
+    <div className="card" role="region" aria-label="Video Chat">
       <h3 style={{ fontSize: 16, marginBottom: 14 }}>Chat with this video</h3>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 16 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 16 }} role="log" aria-live="polite">
         {nextCursor && <button className="btn" disabled={loadingOlder} onClick={loadOlder}>
           {loadingOlder ? "Loading..." : "Load older messages"}
         </button>}
@@ -92,27 +100,46 @@ export default function ChatPanel({ jobId, initialChat = [], onAnswered }) {
             </div>
           </div>
         ))}
+        {asking && (
+          <div>
+            <p style={{ fontSize: 14, fontWeight: 600 }}>You: {question || "..."}</p>
+            <div className="dim" style={{ fontSize: 14, marginTop: 4, fontStyle: "italic" }}>
+              Thinking...
+            </div>
+          </div>
+        )}
       </div>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && <div className="error-banner" role="alert">{error}</div>}
 
-      <form onSubmit={handleAsk} style={{ display: "flex", gap: 8 }}>
-        <input
-          type="text"
-          placeholder="Ask a question about this video..."
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          style={{
-            flex: 1,
-            background: "var(--surface-2)",
-            border: "1px solid var(--border)",
-            borderRadius: 8,
-            color: "var(--text)",
-            padding: "10px 12px",
-            fontSize: 14,
-          }}
-        />
-        <button className="btn btn-primary" type="submit" disabled={asking}>
+      <form onSubmit={handleAsk} style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+        <div className="field" style={{ flex: 1, marginBottom: 0 }}>
+          <label htmlFor="chat-input" className="sr-only" style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0,0,0,0)", border: 0 }}>
+            Ask a question about this video
+          </label>
+          <textarea
+            ref={textareaRef}
+            id="chat-input"
+            placeholder="Ask a question..."
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAsk(e); } }}
+            style={{
+              width: "100%",
+              background: "var(--surface-2)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              color: "var(--text)",
+              padding: "10px 12px",
+              fontSize: 14,
+              resize: "none",
+              minHeight: 40,
+              maxHeight: 150,
+              fontFamily: "inherit"
+            }}
+          />
+        </div>
+        <button className="btn btn-primary" type="submit" disabled={asking} style={{ height: 40 }}>
           {asking ? "..." : "Ask"}
         </button>
       </form>
