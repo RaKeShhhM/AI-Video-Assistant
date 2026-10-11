@@ -101,10 +101,24 @@ export default function JobDetail() {
     }
     socket?.on("job:update", onUpdate);
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        load();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    const handleReconnect = () => {
+      load();
+    };
+    socket?.on("connect", handleReconnect);
+
     return () => {
       mounted = false;
       clearInterval(refresh);
       socket?.off("job:update", onUpdate);
+      socket?.off("connect", handleReconnect);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [id, navigate]);
 

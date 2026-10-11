@@ -7,7 +7,7 @@ export function connectSocket(token) {
   if (socket) {
     socket.disconnect();
   }
-  socket = io(API_URL, { auth: { token }, transports: ["websocket"], withCredentials: true });
+  socket = io(API_URL, { auth: { token }, transports: ["websocket", "polling"], withCredentials: true });
   socket.on("connect_error", (error) => {
     if (/expired|invalid|auth/i.test(error.message || "")) window.dispatchEvent(new Event("auth:expired"));
   });
